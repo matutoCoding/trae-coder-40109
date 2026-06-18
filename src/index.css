@@ -1,0 +1,122 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #e8e0d0;
+  background-color: #0f0f0f;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #0f0f0f;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"),
+    radial-gradient(ellipse at top, rgba(139, 69, 19, 0.12) 0%, rgba(26, 26, 26, 0) 60%);
+  background-attachment: fixed;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Noto Serif SC", Georgia, serif;
+  font-weight: 600;
+  color: #e8e0d0;
+  letter-spacing: 0.01em;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(26, 26, 26, 0.5);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 69, 19, 0.5);
+  border-radius: 4px;
+  border: 1px solid rgba(184, 134, 11, 0.2);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 69, 19, 0.7);
+}
+
+@layer components {
+  .dark-card {
+    @apply bg-ink-900/80 border border-darkroom-800/60 rounded-lg shadow-card-inner backdrop-blur-sm;
+  }
+
+  .dark-card-hover {
+    @apply transition-all duration-300 hover:border-darkroom-500/50 hover:shadow-amber-glow;
+  }
+
+  .amber-btn {
+    @apply px-4 py-2 bg-darkroom-700 text-ink-50 rounded-md border border-darkroom-500/50
+           hover:bg-darkroom-600 hover:shadow-amber-glow transition-all duration-200
+           active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .ghost-btn {
+    @apply px-4 py-2 bg-transparent text-ink-100 rounded-md border border-ink-700
+           hover:border-darkroom-500/50 hover:text-ink-50 hover:bg-ink-800/50
+           transition-all duration-200;
+  }
+
+  .danger-btn {
+    @apply px-4 py-2 bg-status-maintenance/80 text-ink-50 rounded-md border border-status-maintenance
+           hover:bg-status-maintenance hover:shadow-red-glow transition-all duration-200;
+  }
+
+  .input-field {
+    @apply w-full px-3 py-2 bg-ink-950 border border-ink-700 rounded-md text-ink-100
+           focus:outline-none focus:border-darkroom-500 focus:ring-1 focus:ring-darkroom-500/30
+           placeholder:text-ink-500 transition-all duration-200;
+  }
+
+  .label-text {
+    @apply block text-sm text-ink-300 mb-1.5 font-medium;
+  }
+
+  .section-title {
+    @apply text-lg font-serif text-ink-50 flex items-center gap-2 pb-3 border-b border-ink-800 mb-4;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full font-medium;
+  }
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  .gantt-bar {
+    @apply relative rounded-sm h-8 flex items-center justify-center text-xs font-medium
+           overflow-hidden cursor-pointer transition-all duration-200;
+  }
+
+  .progress-bar {
+    @apply h-1.5 rounded-full bg-ink-800 overflow-hidden;
+  }
+
+  .film-perforation {
+    background-image: radial-gradient(circle, #0f0f0f 2px, transparent 2.5px);
+    background-size: 12px 12px;
+    background-position: 0 0;
+  }
+}
