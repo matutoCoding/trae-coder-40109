@@ -99,12 +99,45 @@ export function getStationFreeSlots(
   return slots;
 }
 
+export function hasTimeConflict(
+  stationId: string,
+  bookings: Booking[],
+  startTime: string,
+  endTime: string,
+  excludeBookingId?: string,
+): Booking | null {
+  const start = parseISO(startTime);
+  const end = parseISO(endTime);
+
+  for (const b of bookings) {
+    if (b.stationId !== stationId) continue;
+    if (excludeBookingId && b.id === excludeBookingId) continue;
+    if (b.status === "cancelled" || b.status === "completed") continue;
+
+    const bStart = parseISO(b.startTime);
+    const bEnd = parseISO(b.endTime);
+
+    if (isBefore(start, bEnd) && isAfter(end, bStart)) {
+      return b;
+    }
+  }
+  return null;
+}
+
+export interface AllocationResult {
+  candidates: StationCandidate[];
+  unavailable: Array<{
+    station: Station;
+    reason: string;
+  }>;
+}
+
 export function findBestStation(
   stations: Station[],
   bookings: Booking[],
   startTime: string,
   endTime: string,
-): StationCandidate[] {
+): AllocationResult {
   const start = parseISO(startTime);
   const end = parseISO(endTime);
   const requiredMinutes = differenceInMinutes(end, start);
@@ -112,9 +145,26 @@ export function findBestStation(
   const rangeEnd = addDays(end, 3);
 
   const candidates: StationCandidate[] = [];
+  const unavailable: AllocationResult["unavailable"] = [];
 
   for (const station of stations) {
-    if (station.status === "maintenance") continue;
+    if (station.status === "maintenance") {
+      unavailable.push({ station, reason: "工位处于维护状态" });
+      continue;
+    }
+    if (station.status === "occupied") {
+      unavailable.push({ station, reason: "工位当前被占用" });
+      continue;
+    }
+
+    const conflict = hasTimeConflict(station.id, bookings, startTime, endTime);
+    if (conflict) {
+      unavailable.push({
+        station,
+        reason: `与 ${conflict.photographer} 的预约冲突 (${formatTime(conflict.startTime)}-${formatTime(conflict.endTime)})`,
+      });
+      continue;
+    }
 
     const slots = getStationFreeSlots(station, bookings, rangeStart, rangeEnd);
     const matchingSlot = slots.find(
@@ -125,7 +175,10 @@ export function findBestStation(
 
     if (!matchingSlot) {
       const hasEnough = slots.some((s) => s.durationMinutes >= requiredMinutes);
-      if (!hasEnough) continue;
+      if (!hasEnough) {
+        unavailable.push({ station, reason: "无满足时长的连续空闲时段" });
+        continue;
+      }
     }
 
     let gapBefore = 0;
@@ -135,23 +188,98 @@ export function findBestStation(
       gapAfter = differenceInMinutes(matchingSlot.end, end);
     }
 
+    const stationBookings = bookings
+      .filter(
+        (b) =>
+          b.stationId === station.id &&
+          b.status !== "cancelled" &&
+          b.status !== "completed",
+      )
+      .sort((a, b) => parseISO(a.startTime).getTime() - parseISO(b.startTime).getTime());
+
+    let hasAdjacentBooking = false;
+    let adjacentBooking: StationCandidate["adjacentBooking"] | undefined;
+    const reasons: string[] = [];
+
+    for (const b of stationBookings) {
+      const bStart = parseISO(b.startTime);
+      const bEnd = parseISO(b.endTime);
+
+      const diffBefore = differenceInMinutes(start, bEnd);
+      const diffAfter = differenceInMinutes(bStart, end);
+
+      if (diffBefore > 0 && diffBefore <= 120) {
+        hasAdjacentBooking = true;
+        if (!adjacentBooking) {
+          adjacentBooking = {
+            type: "before",
+            timeDiff: diffBefore,
+            photographer: b.photographer,
+          };
+        } else {
+          adjacentBooking.type = "both";
+        }
+      }
+      if (diffAfter > 0 && diffAfter <= 120) {
+        hasAdjacentBooking = true;
+        if (!adjacentBooking) {
+          adjacentBooking = {
+            type: "after",
+            timeDiff: diffAfter,
+            photographer: b.photographer,
+          };
+        } else {
+          adjacentBooking.type = "both";
+        }
+      }
+    }
+
     const fragmentScore = Math.min(
       1,
       (Math.min(gapBefore, 60) + Math.min(gapAfter, 60)) / 120,
     );
 
-    const todayBookings = bookings.filter((b) => {
+    if (gapBefore === 0 && gapAfter === 0) {
+      reasons.push("✓ 完美填充空闲块，无碎片");
+    } else if (gapBefore <= 30 || gapAfter <= 30) {
+      reasons.push("✓ 有效利用间隙，减少碎片");
+    } else {
+      reasons.push("· 存在一定空闲间隙");
+    }
+
+    const weekBookings = bookings.filter((b) => {
       if (b.stationId !== station.id) return false;
       if (b.status === "cancelled" || b.status === "completed") return false;
       const bStart = parseISO(b.startTime);
       return !isBefore(bStart, addDays(new Date(), -7));
     });
-    const totalBookedMinutes = todayBookings.reduce(
+    const weekBookedMinutes = weekBookings.reduce(
       (sum, b) => sum + differenceInMinutes(parseISO(b.endTime), parseISO(b.startTime)),
       0,
     );
-    const loadRatio = Math.min(1, totalBookedMinutes / (7 * 8 * 60));
+    const weekLoadHours = weekBookedMinutes / 60;
+    const loadRatio = Math.min(1, weekBookedMinutes / (7 * 8 * 60));
     const loadScore = 1 - loadRatio;
+
+    if (loadRatio < 0.3) {
+      reasons.push("✓ 近7日负载低，均衡调度");
+    } else if (loadRatio < 0.6) {
+      reasons.push("· 近7日负载适中");
+    } else {
+      reasons.push("⚠ 近7日负载较高");
+    }
+
+    if (hasAdjacentBooking && adjacentBooking) {
+      if (adjacentBooking.type === "before") {
+      reasons.push(`✓ 紧接 ${adjacentBooking.photographer} 的预约后（间隔${adjacentBooking.timeDiff}分钟，衔接顺畅`);
+    } else if (adjacentBooking.type === "after") {
+      reasons.push(`✓ 紧邻 ${adjacentBooking.photographer} 的预约前（间隔${adjacentBooking.timeDiff}分钟）`);
+    } else {
+      reasons.push("✓ 位于两个预约之间，充分利用空档");
+    }
+  } else {
+    reasons.push("· 时段独立，前后无预约");
+  }
 
     const score = fragmentScore * 0.6 + loadScore * 0.4;
 
@@ -162,10 +290,17 @@ export function findBestStation(
       loadScore,
       gapBefore,
       gapAfter,
+      hasAdjacentBooking,
+      adjacentBooking,
+      weekLoadHours,
+      reasons,
     });
   }
 
-  return candidates.sort((a, b) => b.score - a.score);
+  return {
+    candidates: candidates.sort((a, b) => b.score - a.score),
+    unavailable,
+  };
 }
 
 export function computeChemicalStatus(batch: ChemicalBatch): ChemicalStatus {

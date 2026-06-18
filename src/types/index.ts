@@ -97,6 +97,14 @@ export interface StationCandidate {
   loadScore: number;
   gapBefore: number;
   gapAfter: number;
+  hasAdjacentBooking: boolean;
+  adjacentBooking?: {
+    type: "before" | "after" | "both";
+    timeDiff: number;
+    photographer?: string;
+  };
+  weekLoadHours: number;
+  reasons: string[];
 }
 
 export const STATION_TYPE_LABELS: Record<StationType, string> = {

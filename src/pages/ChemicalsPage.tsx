@@ -15,6 +15,12 @@ import {
   History,
   Recycle,
   BarChart3,
+  ArrowRight,
+  GitBranch,
+  MapPin,
+  User,
+  FileText,
+  PackageOpen,
 } from "lucide-react";
 import {
   BarChart,
@@ -32,11 +38,16 @@ import {
   CHEMICAL_STATUS_LABELS,
   CHEMICAL_TYPE_LABELS,
   WASTE_TYPE_LABELS,
+  RECOVERY_METHOD_LABELS,
   type ChemicalBatch,
   type ChemicalType,
+  type DispatchRecord,
+  type WasteRecord,
+  type Booking,
+  type Station,
 } from "@/types";
 import { useAppStore } from "@/store";
-import { formatDate, getStatusBadgeClass } from "@/utils";
+import { formatDate, formatTime, formatDateTime, getStatusBadgeClass } from "@/utils";
 
 function getProgressColorClass(status: ChemicalBatch["status"]): string {
   const map: Record<string, string> = {
@@ -81,11 +92,276 @@ const defaultFormData: BatchFormData = {
   batchNo: "",
 };
 
+interface FlowNode {
+  id: string;
+  type: "inbound" | "dispatch" | "waste";
+  title: string;
+  subtitle: string;
+  volume: number;
+  volumePrefix?: "+" | "-";
+  timestamp: string;
+  details: Array<{ icon: typeof User; label: string; value: string }>;
+  linkedBooking?: Booking;
+  linkedStation?: Station;
+}
+
+function FlowTimeline({
+  batch,
+  dispatches,
+  wastes,
+  stations,
+  bookings,
+}: {
+  batch: ChemicalBatch;
+  dispatches: DispatchRecord[];
+  wastes: WasteRecord[];
+  stations: Station[];
+  bookings: Booking[];
+}) {
+  const nodes = useMemo<FlowNode[]>(() => {
+    const result: FlowNode[] = [];
+
+    result.push({
+      id: "inbound",
+      type: "inbound",
+      title: "批次入库",
+      subtitle: `${batch.manufacturer} · ${batch.spec || "标准规格"}`,
+      volume: batch.totalVolume,
+      volumePrefix: "+",
+      timestamp: batch.createdAt,
+      details: [
+        { icon: PackagePlus, label: "批次号", value: batch.batchNo },
+        { icon: Clock, label: "生产日期", value: formatDate(batch.productionDate) },
+        { icon: AlertTriangle, label: "有效期至", value: formatDate(batch.expiryDate) },
+      ],
+    });
+
+    const sortedDispatches = [...dispatches].sort(
+      (a, b) => new Date(a.dispatchTime).getTime() - new Date(b.dispatchTime).getTime(),
+    );
+
+    const sortedWastes = [...wastes].sort(
+      (a, b) => new Date(a.recoveryTime).getTime() - new Date(b.recoveryTime).getTime(),
+    );
+
+    const allEvents: Array<
+      | { kind: "dispatch"; data: DispatchRecord; time: number }
+      | { kind: "waste"; data: WasteRecord; time: number }
+    > = [
+      ...sortedDispatches.map((d) => ({
+        kind: "dispatch" as const,
+        data: d,
+        time: new Date(d.dispatchTime).getTime(),
+      })),
+      ...sortedWastes.map((w) => ({
+        kind: "waste" as const,
+        data: w,
+        time: new Date(w.recoveryTime).getTime(),
+      })),
+    ].sort((a, b) => a.time - b.time);
+
+    for (const event of allEvents) {
+      if (event.kind === "dispatch") {
+        const d = event.data;
+        const station = stations.find((s) => s.id === d.stationId);
+        const booking = d.bookingId
+          ? bookings.find((b) => b.id === d.bookingId)
+          : undefined;
+
+        result.push({
+          id: d.id,
+          type: "dispatch",
+          title: "拆分出库",
+          subtitle: d.purpose,
+          volume: d.volume,
+          volumePrefix: "-",
+          timestamp: d.dispatchTime,
+          details: [
+            { icon: User, label: "操作人", value: d.operator },
+            ...(station
+              ? [{ icon: MapPin, label: "使用工位", value: station.name }]
+              : []),
+            ...(booking
+              ? [{ icon: FileText, label: "关联订单", value: `${booking.photographer} · ${booking.filmType}` }]
+              : []),
+          ],
+          linkedBooking: booking,
+          linkedStation: station,
+        });
+      } else {
+        const w = event.data;
+        const station = stations.find((s) => s.id === w.stationId);
+
+        result.push({
+          id: w.id,
+          type: "waste",
+          title: "废液回收",
+          subtitle: WASTE_TYPE_LABELS[w.type],
+          volume: w.volume,
+          volumePrefix: "-",
+          timestamp: w.recoveryTime,
+          details: [
+            { icon: User, label: "操作人", value: w.operator },
+            { icon: Recycle, label: "回收方式", value: RECOVERY_METHOD_LABELS[w.recoveryMethod] },
+            ...(station
+              ? [{ icon: MapPin, label: "来源工位", value: station.name }]
+              : []),
+            ...(w.notes
+              ? [{ icon: FileText, label: "备注", value: w.notes }]
+              : []),
+          ],
+          linkedStation: station,
+        });
+      }
+    }
+
+    return result;
+  }, [batch, dispatches, wastes, stations, bookings]);
+
+  const totalDispatched = dispatches.reduce((sum, d) => sum + d.volume, 0);
+  const totalWasted = wastes.reduce((sum, w) => sum + w.volume, 0);
+
+  return (
+    <div className="dark-card p-5">
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-2">
+          <GitBranch className="w-5 h-5 text-darkroom-400" />
+          <h4 className="font-serif text-ink-50">完整流向链路</h4>
+        </div>
+        <div className="flex items-center gap-4 text-xs">
+          <span className="text-ink-400">
+            已出库：<span className="text-darkroom-200 font-mono">{totalDispatched.toLocaleString()}ml</span>
+          </span>
+          <span className="text-ink-400">
+            已回收：<span className="text-red-300 font-mono">{totalWasted.toLocaleString()}ml</span>
+          </span>
+          <span className="text-ink-400">
+            当前剩余：<span className="text-green-300 font-mono">{batch.remainingVolume.toLocaleString()}ml</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="relative">
+        <div className="absolute left-[22px] top-2 bottom-2 w-0.5 bg-gradient-to-b from-darkroom-600 via-darkroom-800 to-status-maintenance/50" />
+
+        <div className="space-y-4">
+          {nodes.map((node, idx) => (
+            <div key={node.id} className="relative pl-14">
+              <div
+                className={clsx(
+                  "absolute left-0 w-11 h-11 rounded-full flex items-center justify-center border-2 border-ink-900 shadow-lg z-10",
+                  node.type === "inbound" && "bg-status-normal/90",
+                  node.type === "dispatch" && "bg-darkroom-600",
+                  node.type === "waste" && "bg-status-maintenance/90",
+                )}
+              >
+                {node.type === "inbound" && (
+                  <PackageOpen className="w-5 h-5 text-ink-50" />
+                )}
+                {node.type === "dispatch" && (
+                  <Droplets className="w-5 h-5 text-ink-50" />
+                )}
+                {node.type === "waste" && (
+                  <Recycle className="w-5 h-5 text-ink-50" />
+                )}
+              </div>
+
+              {idx < nodes.length - 1 && (
+                <div className="absolute left-5 top-11 text-darkroom-600">
+                  <ArrowRight className="w-3 h-3 rotate-90" />
+                </div>
+              )}
+
+              <div
+                className={clsx(
+                  "dark-card p-4",
+                  node.type === "inbound" && "border-l-2 border-l-status-normal",
+                  node.type === "dispatch" && "border-l-2 border-l-darkroom-500",
+                  node.type === "waste" && "border-l-2 border-l-status-maintenance",
+                )}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h5 className="font-serif text-ink-50 text-base">{node.title}</h5>
+                      <span
+                        className={clsx(
+                          "badge text-[10px]",
+                          node.type === "inbound" && "bg-status-normal/15 text-green-300",
+                          node.type === "dispatch" && "bg-darkroom-500/20 text-darkroom-200",
+                          node.type === "waste" && "bg-status-maintenance/15 text-red-300",
+                        )}
+                      >
+                        {node.volumePrefix}
+                        {node.volume.toLocaleString()}ml
+                      </span>
+                    </div>
+                    <p className="text-sm text-ink-400 mt-0.5">{node.subtitle}</p>
+                  </div>
+                  <span className="text-xs text-ink-500 font-mono">
+                    {formatDateTime(node.timestamp)}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3 pt-3 border-t border-ink-800/60">
+                  {node.details.map((detail, i) => {
+                    const Icon = detail.icon;
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center gap-2 text-xs bg-ink-950/40 rounded-md px-2.5 py-1.5"
+                      >
+                        <Icon className="w-3.5 h-3.5 text-darkroom-400 flex-shrink-0" />
+                        <span className="text-ink-400 flex-shrink-0">{detail.label}：</span>
+                        <span className="text-ink-200 truncate">{detail.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {node.type === "dispatch" && (node.linkedBooking || node.linkedStation) && (
+                  <div className="mt-3 pt-3 border-t border-ink-800/30">
+                    <div className="flex items-center gap-4 text-xs">
+                      {node.linkedStation && (
+                        <div className="flex items-center gap-1.5 text-ink-400">
+                          <MapPin className="w-3.5 h-3.5 text-status-normal" />
+                          <span>
+                            工位：<span className="text-ink-200">{node.linkedStation.name}</span>
+                          </span>
+                        </div>
+                      )}
+                      {node.linkedBooking && (
+                        <div className="flex items-center gap-1.5 text-ink-400">
+                          <FileText className="w-3.5 h-3.5 text-darkroom-400" />
+                          <span>
+                            预约：<span className="text-ink-200">{node.linkedBooking.photographer}</span>
+                            <span className="text-ink-500 mx-1">·</span>
+                            <span className="text-ink-300">
+                              {formatTime(node.linkedBooking.startTime)}-
+                              {formatTime(node.linkedBooking.endTime)}
+                            </span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChemicalsPage() {
   const {
     chemicalBatches,
     dispatchRecords,
     wasteRecords,
+    stations,
+    bookings,
     addChemicalBatch,
     deleteChemicalBatch,
   } = useAppStore();
@@ -593,9 +869,9 @@ export default function ChemicalsPage() {
       )}
 
       {detailBatch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 backdrop-blur-sm">
-          <div className="dark-card w-full max-w-3xl mx-4 max-h-[90vh] overflow-auto">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-ink-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 backdrop-blur-sm overflow-y-auto py-8">
+          <div className="dark-card w-full max-w-4xl mx-4 my-auto max-h-[calc(100vh-4rem)] overflow-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-ink-800 sticky top-0 bg-ink-900/95 backdrop-blur-sm z-10">
               <div className="flex items-center gap-3">
                 <div
                   className={clsx(
@@ -731,110 +1007,16 @@ export default function ChemicalsPage() {
                 </div>
               </div>
 
-              <div className="dark-card p-4">
-                <div className="section-title !mb-3">
-                  <History className="w-4 h-4 text-darkroom-300" />
-                  出库历史记录
-                </div>
-                {batchDispatches.length === 0 ? (
-                  <div className="py-6 text-center text-ink-500 text-sm">
-                    暂无出库记录
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="text-xs text-ink-400 border-b border-ink-800">
-                          <th className="text-left py-2 font-medium">时间</th>
-                          <th className="text-left py-2 font-medium">用途</th>
-                          <th className="text-right py-2 font-medium">量(ml)</th>
-                          <th className="text-left py-2 font-medium">操作人</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-ink-800/60">
-                        {batchDispatches
-                          .slice()
-                          .sort(
-                            (a, b) =>
-                              new Date(b.dispatchTime).getTime() -
-                              new Date(a.dispatchTime).getTime(),
-                          )
-                          .map((d) => (
-                            <tr key={d.id}>
-                              <td className="py-2 text-sm text-ink-300 font-mono">
-                                {formatDate(d.dispatchTime)}
-                              </td>
-                              <td className="py-2 text-sm text-ink-200">{d.purpose}</td>
-                              <td className="py-2 text-sm text-right font-mono text-darkroom-200">
-                                -{d.volume.toLocaleString()}
-                              </td>
-                              <td className="py-2 text-sm text-ink-300">{d.operator}</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <div className="dark-card p-4">
-                <div className="section-title !mb-3">
-                  <Recycle className="w-4 h-4 text-darkroom-300" />
-                  关联废液记录
-                </div>
-                {batchWastes.length === 0 ? (
-                  <div className="py-6 text-center text-ink-500 text-sm">
-                    暂无废液记录
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="text-xs text-ink-400 border-b border-ink-800">
-                          <th className="text-left py-2 font-medium">时间</th>
-                          <th className="text-left py-2 font-medium">废液类型</th>
-                          <th className="text-right py-2 font-medium">量(ml)</th>
-                          <th className="text-left py-2 font-medium">处理方式</th>
-                          <th className="text-left py-2 font-medium">操作人</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-ink-800/60">
-                        {batchWastes
-                          .slice()
-                          .sort(
-                            (a, b) =>
-                              new Date(b.recoveryTime).getTime() -
-                              new Date(a.recoveryTime).getTime(),
-                          )
-                          .map((w) => (
-                            <tr key={w.id}>
-                              <td className="py-2 text-sm text-ink-300 font-mono">
-                                {formatDate(w.recoveryTime)}
-                              </td>
-                              <td className="py-2 text-sm text-ink-200">
-                                {WASTE_TYPE_LABELS[w.type]}
-                              </td>
-                              <td className="py-2 text-sm text-right font-mono text-status-expired">
-                                {w.volume.toLocaleString()}
-                              </td>
-                              <td className="py-2 text-sm text-ink-300">
-                                {w.recoveryMethod === "professional"
-                                  ? "专业回收"
-                                  : w.recoveryMethod === "neutralization"
-                                    ? "中和处理"
-                                    : "暂存待处理"}
-                              </td>
-                              <td className="py-2 text-sm text-ink-300">{w.operator}</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+              <FlowTimeline
+                batch={detailBatch}
+                dispatches={batchDispatches}
+                wastes={batchWastes}
+                stations={stations}
+                bookings={bookings}
+              />
             </div>
 
-            <div className="flex justify-end gap-3 px-5 py-4 border-t border-ink-800">
+            <div className="flex justify-end gap-3 px-5 py-4 border-t border-ink-800 sticky bottom-0 bg-ink-900/95 backdrop-blur-sm">
               <button
                 className="danger-btn flex items-center gap-2"
                 onClick={() => handleDelete(detailBatch.id)}

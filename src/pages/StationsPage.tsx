@@ -15,6 +15,11 @@ import {
   ChevronRight,
   Gauge,
   Layers,
+  ChevronLeft,
+  CalendarDays,
+  Info,
+  Ban,
+  CheckCircle2,
 } from "lucide-react";
 import {
   setHours,
@@ -23,9 +28,11 @@ import {
   format,
   parseISO,
   isSameDay,
+  addDays,
+  startOfDay,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { cn } from "@/lib/utils";
+import { clsx } from "clsx";
 import { useAppStore } from "@/store";
 import {
   formatTime,
@@ -33,6 +40,8 @@ import {
   findBestStation,
   getStatusBadgeClass,
   getStatusColorClass,
+  hasTimeConflict,
+  type AllocationResult,
 } from "@/utils";
 import type {
   Station,
@@ -152,9 +161,9 @@ function StationCard({
             <span className="font-mono text-sm text-darkroom-300">
               {station.code}
             </span>
-            <span className={cn("badge", getStatusBadgeClass(station.status))}>
+            <span className={clsx("badge", getStatusBadgeClass(station.status))}>
               <span
-                className={cn("status-dot", getStatusColorClass(station.status))}
+                className={clsx("status-dot", getStatusColorClass(station.status))}
               />
               {statusLabel}
             </span>
@@ -199,7 +208,7 @@ function StationCard({
         </div>
         <div className="h-1.5 w-20 bg-ink-800 rounded-full overflow-hidden">
           <div
-            className={cn("h-full rounded-full", getStatusColorClass(station.status))}
+            className={clsx("h-full rounded-full", getStatusColorClass(station.status))}
             style={{
               width: `${Math.min(100, (todayBookings.length / Math.max(station.capacity, 1)) * 100)}%`,
             }}
@@ -213,15 +222,16 @@ function StationCard({
 function GanttChart({
   stations,
   bookings,
+  currentDate,
   onBookingClick,
 }: {
   stations: Station[];
   bookings: Booking[];
+  currentDate: Date;
   onBookingClick: (b: Booking) => void;
 }) {
   const [hoverBooking, setHoverBooking] = useState<Booking | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
-  const today = startOfToday();
 
   const getBookingPosition = (booking: Booking) => {
     const start = parseISO(booking.startTime);
@@ -251,8 +261,8 @@ function GanttChart({
     return map[status] || "bg-ink-600 border-ink-500";
   };
 
-  const todayBookings = bookings.filter((b) =>
-    isSameDay(parseISO(b.startTime), today),
+  const dayBookings = bookings.filter((b) =>
+    isSameDay(parseISO(b.startTime), currentDate),
   );
 
   return (
@@ -278,7 +288,7 @@ function GanttChart({
 
         <div className="space-y-2">
           {stations.map((station) => {
-            const stationBookings = todayBookings.filter(
+            const stationBookings = dayBookings.filter(
               (b) => b.stationId === station.id,
             );
             return (
@@ -286,7 +296,7 @@ function GanttChart({
                 <div className="w-44 flex-shrink-0 pr-4">
                   <div className="flex items-center gap-2">
                     <span
-                      className={cn(
+                      className={clsx(
                         "status-dot",
                         getStatusColorClass(station.status),
                       )}
@@ -323,7 +333,7 @@ function GanttChart({
                     return (
                       <div
                         key={booking.id}
-                        className={cn(
+                        className={clsx(
                           "gantt-bar border",
                           getBarColor(booking.status),
                           booking.status === "cancelled" &&
@@ -367,13 +377,13 @@ function GanttChart({
             <div className="dark-card px-4 py-3 shadow-xl border-darkroom-500/40 min-w-[220px]">
               <div className="flex items-center gap-2 mb-2">
                 <span
-                  className={cn("status-dot", getStatusColorClass(hoverBooking.status))}
+                  className={clsx("status-dot", getStatusColorClass(hoverBooking.status))}
                 />
                 <span className="text-sm font-medium text-ink-50">
                   {hoverBooking.photographer}
                 </span>
                 <span
-                  className={cn("badge ml-auto", getStatusBadgeClass(hoverBooking.status))}
+                  className={clsx("badge ml-auto", getStatusBadgeClass(hoverBooking.status))}
                 >
                   {(BOOKING_STATUS_LABELS as Record<Booking["status"], string>)[
                     hoverBooking.status
@@ -427,6 +437,89 @@ function GanttChart({
   );
 }
 
+function WeekPicker({
+  currentDate,
+  onDateChange,
+}: {
+  currentDate: Date;
+  onDateChange: (date: Date) => void;
+}) {
+  const weekDays = useMemo(() => {
+    const days: Date[] = [];
+    const monday = startOfDay(currentDate);
+    for (let i = 0; i < 7; i++) {
+      days.push(addDays(monday, i - 3));
+    }
+    return days;
+  }, [currentDate]);
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={() => onDateChange(addDays(currentDate, -7))}
+        className="ghost-btn !p-1.5"
+        title="上一周"
+      >
+        <ChevronLeft className="w-4 h-4" />
+      </button>
+
+      <div className="flex gap-1 bg-ink-900/50 rounded-lg p-1">
+        {weekDays.map((date) => {
+          const isToday = isSameDay(date, new Date());
+          const isSelected = isSameDay(date, currentDate);
+          return (
+            <button
+              key={date.toISOString()}
+              onClick={() => onDateChange(date)}
+              className={clsx(
+                "px-3 py-2 rounded-md text-center min-w-[56px] transition-all",
+                isSelected
+                  ? "bg-darkroom-600 text-ink-50 shadow-amber-glow"
+                  : "text-ink-300 hover:bg-ink-800",
+              )}
+            >
+              <div className="text-[10px] uppercase tracking-wider mb-0.5">
+                {format(date, "EEE", { locale: zhCN })}
+              </div>
+              <div
+                className={clsx(
+                  "text-sm font-mono",
+                  isToday && !isSelected && "text-darkroom-300",
+                )}
+              >
+                {format(date, "MM/dd")}
+              </div>
+              {isToday && (
+                <div
+                  className={clsx(
+                    "w-1 h-1 rounded-full mx-auto mt-1",
+                    isSelected ? "bg-ink-50" : "bg-darkroom-400",
+                  )}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <button
+        onClick={() => onDateChange(addDays(currentDate, 7))}
+        className="ghost-btn !p-1.5"
+        title="下一周"
+      >
+        <ChevronRight className="w-4 h-4" />
+      </button>
+
+      <button
+        onClick={() => onDateChange(startOfToday())}
+        className="ghost-btn text-xs py-1.5 px-3"
+      >
+        今天
+      </button>
+    </div>
+  );
+}
+
 function CandidateCard({
   candidate,
   rank,
@@ -438,8 +531,16 @@ function CandidateCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { station, score, fragmentScore, loadScore, gapBefore, gapAfter } =
-    candidate;
+  const {
+    station,
+    score,
+    fragmentScore,
+    loadScore,
+    gapBefore,
+    gapAfter,
+    weekLoadHours,
+    reasons,
+  } = candidate;
 
   const typeLabel = (STATION_TYPE_LABELS as Record<StationType, string>)[station.type];
   const statusLabel = (STATION_STATUS_LABELS as Record<StationStatus, string>)[station.status];
@@ -447,7 +548,7 @@ function CandidateCard({
   return (
     <div
       onClick={onSelect}
-      className={cn(
+      className={clsx(
         "dark-card dark-card-hover p-4 cursor-pointer transition-all duration-200",
         selected
           ? "border-darkroom-500 shadow-amber-glow ring-1 ring-darkroom-500/30"
@@ -456,7 +557,7 @@ function CandidateCard({
     >
       <div className="flex items-start gap-4">
         <div
-          className={cn(
+          className={clsx(
             "w-10 h-10 rounded-full flex items-center justify-center font-serif text-lg font-bold flex-shrink-0",
             rank === 1
               ? "bg-darkroom-600 text-ink-50 shadow-amber-glow"
@@ -476,9 +577,9 @@ function CandidateCard({
               {station.code}
             </span>
             <h4 className="text-base font-serif text-ink-50">{station.name}</h4>
-            <span className={cn("badge", getStatusBadgeClass(station.status))}>
+            <span className={clsx("badge", getStatusBadgeClass(station.status))}>
               <span
-                className={cn("status-dot", getStatusColorClass(station.status))}
+                className={clsx("status-dot", getStatusColorClass(station.status))}
               />
               {statusLabel}
             </span>
@@ -488,6 +589,8 @@ function CandidateCard({
             <span>{typeLabel}</span>
             <span>·</span>
             <span>容量 {station.capacity} 卷</span>
+            <span>·</span>
+            <span>近7日负载 {weekLoadHours.toFixed(1)}h</span>
           </div>
 
           <div className="grid grid-cols-3 gap-3 mb-3">
@@ -520,7 +623,7 @@ function CandidateCard({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-2 text-xs mb-3">
             <span className="text-ink-400">前后空闲：</span>
             <span className="text-ink-200">
               前 {gapBefore > 0 ? `${gapBefore}分钟` : "—"}
@@ -530,13 +633,53 @@ function CandidateCard({
               后 {gapAfter > 0 ? `${gapAfter}分钟` : "—"}
             </span>
           </div>
+
+          <div className="space-y-1.5 bg-ink-950/40 rounded-md p-3">
+            <div className="flex items-center gap-1.5 text-[10px] text-ink-400 uppercase tracking-wider mb-1">
+              <Info className="w-3 h-3 text-darkroom-400" />
+              推荐理由
+            </div>
+            {reasons.map((reason, idx) => (
+              <div
+                key={idx}
+                className="text-xs text-ink-300 pl-3 relative before:content-[''] before:absolute before:left-0 before:top-1.5 before:w-1 before:h-1 before:rounded-full before:bg-darkroom-500"
+              >
+                {reason}
+              </div>
+            ))}
+          </div>
         </div>
 
         {selected && (
           <div className="flex-shrink-0">
-            <CheckCircle className="w-6 h-6 text-darkroom-400" />
+            <CheckCircle2 className="w-6 h-6 text-darkroom-400" />
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function UnavailableStationItem({
+  station,
+  reason,
+}: {
+  station: Station;
+  reason: string;
+}) {
+  const typeLabel = (STATION_TYPE_LABELS as Record<StationType, string>)[station.type];
+  return (
+    <div className="flex items-center gap-3 p-3 bg-ink-950/40 rounded-md border border-ink-800/60 opacity-75">
+      <div className="w-8 h-8 rounded-full bg-status-maintenance/15 flex items-center justify-center flex-shrink-0">
+        <Ban className="w-4 h-4 text-status-maintenance" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs text-ink-400">{station.code}</span>
+          <span className="text-sm text-ink-300">{station.name}</span>
+          <span className="text-xs text-ink-500">({typeLabel})</span>
+        </div>
+        <div className="text-xs text-status-maintenance mt-0.5">{reason}</div>
       </div>
     </div>
   );
@@ -557,17 +700,17 @@ export default function StationsPage() {
     initMockData();
   }, [initMockData]);
 
+  const [currentDate, setCurrentDate] = useState<Date>(() => startOfToday());
+
   const [showStationModal, setShowStationModal] = useState(false);
   const [editingStation, setEditingStation] = useState<Station | null>(null);
   const [stationForm, setStationForm] = useState<StationFormData>(defaultStationForm);
 
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [bookingForm, setBookingForm] = useState<BookingFormData>(defaultBookingForm);
-  const [candidates, setCandidates] = useState<StationCandidate[]>([]);
+  const [allocationResult, setAllocationResult] = useState<AllocationResult | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null);
   const [allocating, setAllocating] = useState(false);
-
-  const today = useMemo(() => startOfToday(), []);
 
   const handleOpenAddStation = () => {
     setEditingStation(null);
@@ -607,11 +750,11 @@ export default function StationsPage() {
 
   const handleOpenBooking = () => {
     const defaultStart = format(
-      setMinutes(setHours(today, 10), 0),
+      setMinutes(setHours(currentDate, 10), 0),
       "yyyy-MM-dd'T'HH:mm",
     );
     const defaultEnd = format(
-      setMinutes(setHours(today, 12), 0),
+      setMinutes(setHours(currentDate, 12), 0),
       "yyyy-MM-dd'T'HH:mm",
     );
     setBookingForm({
@@ -619,7 +762,7 @@ export default function StationsPage() {
       startTime: defaultStart,
       endTime: defaultEnd,
     });
-    setCandidates([]);
+    setAllocationResult(null);
     setSelectedCandidate(null);
     setAllocating(false);
     setShowBookingModal(true);
@@ -644,16 +787,16 @@ export default function StationsPage() {
     }
     setAllocating(true);
     setTimeout(() => {
-      const results = findBestStation(
+      const result = findBestStation(
         stations,
         bookings,
         new Date(bookingForm.startTime).toISOString(),
         new Date(bookingForm.endTime).toISOString(),
       );
-      setCandidates(results);
-      setSelectedCandidate(results.length > 0 ? results[0].station.id : null);
+      setAllocationResult(result);
+      setSelectedCandidate(result.candidates.length > 0 ? result.candidates[0].station.id : null);
       setAllocating(false);
-    }, 400);
+    }, 500);
   };
 
   const handleConfirmBooking = () => {
@@ -661,6 +804,30 @@ export default function StationsPage() {
       alert("请先选择一个工位");
       return;
     }
+
+    const conflict = hasTimeConflict(
+      selectedCandidate,
+      bookings,
+      new Date(bookingForm.startTime).toISOString(),
+      new Date(bookingForm.endTime).toISOString(),
+    );
+    if (conflict) {
+      alert(
+        `该工位在此时间段已有预约冲突：\n${conflict.photographer} - ${formatTime(conflict.startTime)}~${formatTime(conflict.endTime)}`,
+      );
+      return;
+    }
+
+    const station = stations.find((s) => s.id === selectedCandidate);
+    if (station?.status === "occupied") {
+      alert("该工位当前被占用，请选择其他工位");
+      return;
+    }
+    if (station?.status === "maintenance") {
+      alert("该工位处于维护状态，请选择其他工位");
+      return;
+    }
+
     addBooking({
       stationId: selectedCandidate,
       photographer: bookingForm.photographer.trim(),
@@ -671,11 +838,13 @@ export default function StationsPage() {
       status: "confirmed",
       notes: bookingForm.notes.trim() || undefined,
     });
+
+    setCurrentDate(startOfDay(parseISO(bookingForm.startTime)));
     setShowBookingModal(false);
   };
 
   const handleReallocate = () => {
-    setCandidates([]);
+    setAllocationResult(null);
     setSelectedCandidate(null);
   };
 
@@ -730,11 +899,13 @@ export default function StationsPage() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <h3 className="section-title mb-0">
-            <span>今日排期</span>
+            <CalendarDays className="w-5 h-5 text-darkroom-400 mr-2" />
+            <span>排期甘特图</span>
             <span className="text-sm font-mono text-ink-400 ml-3">
-              {format(today, "yyyy年MM月dd日 EEEE", { locale: zhCN })}
+              {format(currentDate, "yyyy年MM月dd日 EEEE", { locale: zhCN })}
             </span>
           </h3>
+          <WeekPicker currentDate={currentDate} onDateChange={setCurrentDate} />
         </div>
 
         {stations.length === 0 ? (
@@ -745,6 +916,7 @@ export default function StationsPage() {
           <GanttChart
             stations={stations}
             bookings={bookings}
+            currentDate={currentDate}
             onBookingClick={(b) => {
               alert(
                 `预约详情：\n摄影师：${b.photographer}\n胶卷：${b.filmType} × ${b.filmCount}\n时间：${formatDateTime(b.startTime)} - ${formatTime(b.endTime)}\n状态：${(BOOKING_STATUS_LABELS as Record<Booking["status"], string>)[b.status]}`,
@@ -985,7 +1157,7 @@ export default function StationsPage() {
             />
           </div>
 
-          {candidates.length === 0 ? (
+          {!allocationResult ? (
             <button
               onClick={handleFindBestStation}
               disabled={allocating}
@@ -1008,7 +1180,7 @@ export default function StationsPage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-sm text-ink-300">
                   <Sparkles className="w-4 h-4 text-darkroom-400" />
-                  推荐 {candidates.length} 个可用工位，点击选择
+                  找到 {allocationResult.candidates.length} 个可用工位
                 </div>
                 <button
                   onClick={handleReallocate}
@@ -1019,16 +1191,19 @@ export default function StationsPage() {
                 </button>
               </div>
 
-              {candidates.length === 0 ? (
+              {allocationResult.candidates.length === 0 ? (
                 <div className="dark-card p-6 text-center">
                   <AlertCircle className="w-8 h-8 text-status-maintenance mx-auto mb-2" />
-                  <div className="text-sm text-ink-300">
+                  <div className="text-sm text-ink-300 mb-2">
                     没有找到符合时间段的空闲工位
+                  </div>
+                  <div className="text-xs text-ink-500">
+                    请尝试调整时间或更换日期
                   </div>
                 </div>
               ) : (
                 <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
-                  {candidates.map((candidate, idx) => (
+                  {allocationResult.candidates.map((candidate, idx) => (
                     <CandidateCard
                       key={candidate.station.id}
                       candidate={candidate}
@@ -1039,6 +1214,24 @@ export default function StationsPage() {
                       }
                     />
                   ))}
+                </div>
+              )}
+
+              {allocationResult.unavailable.length > 0 && (
+                <div className="mt-4">
+                  <div className="flex items-center gap-1.5 text-xs text-ink-500 uppercase tracking-wider mb-2">
+                    <Ban className="w-3 h-3" />
+                    不可用工位 ({allocationResult.unavailable.length})
+                  </div>
+                  <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
+                    {allocationResult.unavailable.map((item) => (
+                      <UnavailableStationItem
+                        key={item.station.id}
+                        station={item.station}
+                        reason={item.reason}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
 
