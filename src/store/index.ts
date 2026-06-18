@@ -172,19 +172,28 @@ function createMockChemicals(): ChemicalBatch[] {
 function createMockDispatches(
   batches: ChemicalBatch[],
   stations: Station[],
+  bookings: Booking[],
 ): DispatchRecord[] {
   const records: DispatchRecord[] = [];
   const operators = ["技师老王", "技师小李", "管理员"];
   const purposes = ["日常冲洗", "批量作业", "实验测试", "加急订单"];
 
+  const validBookings = bookings.filter(
+    (b) => b.status !== "cancelled" && b.status !== "completed",
+  );
+
   for (let i = 0; i < 10; i++) {
     const batch = batches[i % batches.length];
     if (batch.remainingVolume >= batch.totalVolume) continue;
 
+    const station = stations[i % stations.length];
+    const booking = validBookings.find((b) => b.stationId === station.id);
+
     records.push({
       id: uid(),
       batchId: batch.id,
-      stationId: stations[i % stations.length].id,
+      stationId: station.id,
+      bookingId: booking?.id,
       volume: 200 + (i % 4) * 100,
       operator: operators[i % operators.length],
       dispatchTime: formatISO(addDays(new Date(), -i)),
@@ -283,7 +292,7 @@ export const useAppStore = create<AppState>()(
         const stations = createMockStations();
         const bookings = createMockBookings(stations);
         const chemicalBatches = createMockChemicals();
-        const dispatchRecords = createMockDispatches(chemicalBatches, stations);
+        const dispatchRecords = createMockDispatches(chemicalBatches, stations, bookings);
         const wasteRecords = createMockWaste(chemicalBatches, stations);
         set({
           stations,

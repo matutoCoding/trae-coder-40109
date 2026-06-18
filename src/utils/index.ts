@@ -4,7 +4,11 @@ import {
   format,
   isAfter,
   isBefore,
+  isSameDay,
   parseISO,
+  setHours,
+  setMinutes,
+  startOfDay,
 } from "date-fns";
 import type {
   Booking,
@@ -181,70 +185,67 @@ export function findBestStation(
       }
     }
 
-    let gapBefore = 0;
-    let gapAfter = 0;
-    if (matchingSlot) {
-      gapBefore = differenceInMinutes(start, matchingSlot.start);
-      gapAfter = differenceInMinutes(matchingSlot.end, end);
-    }
+    const dayStart = setHours(setMinutes(start, 0), 8);
+    const dayEnd = setHours(setMinutes(start, 0), 22);
 
-    const stationBookings = bookings
+    const dayBookings = bookings
       .filter(
         (b) =>
           b.stationId === station.id &&
+          isSameDay(parseISO(b.startTime), start) &&
           b.status !== "cancelled" &&
           b.status !== "completed",
       )
       .sort((a, b) => parseISO(a.startTime).getTime() - parseISO(b.startTime).getTime());
 
-    let hasAdjacentBooking = false;
-    let adjacentBooking: StationCandidate["adjacentBooking"] | undefined;
-    const reasons: string[] = [];
+    let gapBefore = -1;
+    let gapAfter = -1;
+    let prevBooking: Booking | undefined;
+    let nextBooking: Booking | undefined;
 
-    for (const b of stationBookings) {
-      const bStart = parseISO(b.startTime);
+    for (const b of dayBookings) {
       const bEnd = parseISO(b.endTime);
-
-      const diffBefore = differenceInMinutes(start, bEnd);
-      const diffAfter = differenceInMinutes(bStart, end);
-
-      if (diffBefore > 0 && diffBefore <= 120) {
-        hasAdjacentBooking = true;
-        if (!adjacentBooking) {
-          adjacentBooking = {
-            type: "before",
-            timeDiff: diffBefore,
-            photographer: b.photographer,
-          };
-        } else {
-          adjacentBooking.type = "both";
-        }
+      const bStart = parseISO(b.startTime);
+      if (isBefore(bEnd, start)) {
+        prevBooking = b;
       }
-      if (diffAfter > 0 && diffAfter <= 120) {
-        hasAdjacentBooking = true;
-        if (!adjacentBooking) {
-          adjacentBooking = {
-            type: "after",
-            timeDiff: diffAfter,
-            photographer: b.photographer,
-          };
-        } else {
-          adjacentBooking.type = "both";
-        }
+      if (isAfter(bStart, end) && !nextBooking) {
+        nextBooking = b;
       }
     }
 
-    const fragmentScore = Math.min(
-      1,
-      (Math.min(gapBefore, 60) + Math.min(gapAfter, 60)) / 120,
-    );
-
-    if (gapBefore === 0 && gapAfter === 0) {
-      reasons.push("✓ 完美填充空闲块，无碎片");
-    } else if (gapBefore <= 30 || gapAfter <= 30) {
-      reasons.push("✓ 有效利用间隙，减少碎片");
+    if (prevBooking) {
+      gapBefore = differenceInMinutes(start, parseISO(prevBooking.endTime));
     } else {
-      reasons.push("· 存在一定空闲间隙");
+      gapBefore = differenceInMinutes(start, dayStart);
+    }
+
+    if (nextBooking) {
+      gapAfter = differenceInMinutes(parseISO(nextBooking.startTime), end);
+    } else {
+      gapAfter = differenceInMinutes(dayEnd, end);
+    }
+
+    const reasons: string[] = [];
+
+    const isExactFit =
+      (prevBooking && gapBefore <= 1) && (nextBooking && gapAfter <= 1);
+    const hasNeighbors = prevBooking || nextBooking;
+
+    if (isExactFit) {
+      reasons.push("✓ 完美嵌入空闲时段，前后零间隙");
+    } else if (hasNeighbors && (gapBefore <= 30 || gapAfter <= 30)) {
+      const gaps = [];
+      if (prevBooking && gapBefore <= 30) gaps.push(`前隙${gapBefore}分钟`);
+      if (nextBooking && gapAfter <= 30) gaps.push(`后隙${gapAfter}分钟`);
+      reasons.push(`✓ 紧凑利用间隙（${gaps.join("、")}），减少碎片`);
+    } else if (!hasNeighbors) {
+      reasons.push("· 独立大空档，前后无预约");
+    } else {
+      const beforeDesc = prevBooking ? `前${gapBefore}分钟` : "";
+      const afterDesc = nextBooking ? `后${gapAfter}分钟` : "";
+      const gapDesc = [beforeDesc, afterDesc].filter(Boolean).join("、");
+      reasons.push(`· 空档较大（${gapDesc}），会产生碎片`);
     }
 
     const weekBookings = bookings.filter((b) => {
@@ -262,24 +263,57 @@ export function findBestStation(
     const loadScore = 1 - loadRatio;
 
     if (loadRatio < 0.3) {
-      reasons.push("✓ 近7日负载低，均衡调度");
+      reasons.push(`✓ 近7日负载${weekLoadHours.toFixed(1)}h，偏低，均衡调度`);
     } else if (loadRatio < 0.6) {
-      reasons.push("· 近7日负载适中");
+      reasons.push(`· 近7日负载${weekLoadHours.toFixed(1)}h，适中`);
     } else {
-      reasons.push("⚠ 近7日负载较高");
+      reasons.push(`⚠ 近7日负载${weekLoadHours.toFixed(1)}h，较高`);
     }
 
-    if (hasAdjacentBooking && adjacentBooking) {
-      if (adjacentBooking.type === "before") {
-      reasons.push(`✓ 紧接 ${adjacentBooking.photographer} 的预约后（间隔${adjacentBooking.timeDiff}分钟，衔接顺畅`);
-    } else if (adjacentBooking.type === "after") {
-      reasons.push(`✓ 紧邻 ${adjacentBooking.photographer} 的预约前（间隔${adjacentBooking.timeDiff}分钟）`);
-    } else {
-      reasons.push("✓ 位于两个预约之间，充分利用空档");
+    if (prevBooking || nextBooking) {
+      const neighbors = [];
+      if (prevBooking) {
+        neighbors.push(
+          `紧接 ${prevBooking.photographer} 之后（间隔${gapBefore}分钟）`,
+        );
+      }
+      if (nextBooking) {
+        neighbors.push(
+          `紧邻 ${nextBooking.photographer} 之前（间隔${gapAfter}分钟）`,
+        );
+      }
+      neighbors.forEach((n) => reasons.push(`✓ ${n}`));
     }
-  } else {
-    reasons.push("· 时段独立，前后无预约");
-  }
+
+    let hasAdjacentBooking = false;
+    let adjacentBooking: StationCandidate["adjacentBooking"] | undefined;
+
+    if (prevBooking || nextBooking) {
+      hasAdjacentBooking = true;
+      if (prevBooking && nextBooking) {
+        adjacentBooking = {
+          type: "both",
+          timeDiff: Math.min(gapBefore, gapAfter),
+          photographer: prevBooking.photographer,
+        };
+      } else if (prevBooking) {
+        adjacentBooking = {
+          type: "before",
+          timeDiff: gapBefore,
+          photographer: prevBooking.photographer,
+        };
+      } else if (nextBooking) {
+        adjacentBooking = {
+          type: "after",
+          timeDiff: gapAfter,
+          photographer: nextBooking.photographer,
+        };
+      }
+    }
+
+    const fragmentScore = hasNeighbors
+      ? Math.min(1, (Math.min(gapBefore, 120) + Math.min(gapAfter, 120)) / 240)
+      : 0.3;
 
     const score = fragmentScore * 0.6 + loadScore * 0.4;
 

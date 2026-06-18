@@ -20,6 +20,14 @@ import {
   Info,
   Ban,
   CheckCircle2,
+  Grid3X3,
+  ChevronDown,
+  ChevronUp,
+  BarChart2,
+  Droplets,
+  Recycle,
+  GitBranch,
+  FileText,
 } from "lucide-react";
 import {
   setHours,
@@ -30,6 +38,7 @@ import {
   isSameDay,
   addDays,
   startOfDay,
+  differenceInMinutes,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { clsx } from "clsx";
@@ -49,11 +58,15 @@ import type {
   StationType,
   StationStatus,
   StationCandidate,
+  ChemicalBatch,
+  DispatchRecord,
+  WasteRecord,
 } from "@/types";
 import {
   STATION_TYPE_LABELS,
   STATION_STATUS_LABELS,
   BOOKING_STATUS_LABELS,
+  WASTE_TYPE_LABELS,
 } from "@/types";
 
 const HOURS = Array.from({ length: 15 }, (_, i) => 8 + i);
@@ -213,6 +226,201 @@ function StationCard({
               width: `${Math.min(100, (todayBookings.length / Math.max(station.capacity, 1)) * 100)}%`,
             }}
           />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WeekOverview({
+  stations,
+  bookings,
+  weekStart,
+  onDayClick,
+}: {
+  stations: Station[];
+  bookings: Booking[];
+  weekStart: Date;
+  onDayClick: (date: Date) => void;
+}) {
+  const weekDays = useMemo(() => {
+    const days: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      days.push(addDays(weekStart, i));
+    }
+    return days;
+  }, [weekStart]);
+
+  const getDayOccupancy = (stationId: string, date: Date) => {
+    const dayStart = setHours(setMinutes(startOfDay(date), 0), 8);
+    const dayEnd = setHours(setMinutes(startOfDay(date), 0), 22);
+    const totalMinutes = 14 * 60;
+
+    const dayBookings = bookings.filter(
+      (b) =>
+        b.stationId === stationId &&
+        isSameDay(parseISO(b.startTime), date) &&
+        b.status !== "cancelled" &&
+        b.status !== "completed",
+    );
+
+    let bookedMinutes = 0;
+    for (const b of dayBookings) {
+      const bStart = parseISO(b.startTime);
+      const bEnd = parseISO(b.endTime);
+      const overlapStart = bStart > dayStart ? bStart : dayStart;
+      const overlapEnd = bEnd < dayEnd ? bEnd : dayEnd;
+      const overlap = differenceInMinutes(overlapEnd, overlapStart);
+      if (overlap > 0) bookedMinutes += overlap;
+    }
+
+    const ratio = Math.min(1, bookedMinutes / totalMinutes);
+    return { ratio, count: dayBookings.length, minutes: bookedMinutes };
+  };
+
+  const getHeatColor = (ratio: number) => {
+    if (ratio === 0) return "bg-ink-900/30";
+    if (ratio < 0.25) return "bg-status-normal/30";
+    if (ratio < 0.5) return "bg-status-normal/50";
+    if (ratio < 0.75) return "bg-darkroom-500/60";
+    return "bg-status-occupied/70";
+  };
+
+  const getHeatLabel = (ratio: number) => {
+    if (ratio === 0) return "空闲";
+    if (ratio < 0.25) return "较低";
+    if (ratio < 0.5) return "适中";
+    if (ratio < 0.75) return "较高";
+    return "繁忙";
+  };
+
+  return (
+    <div className="dark-card p-5">
+      <div className="min-w-[900px]">
+        <div className="flex border-b border-ink-800 pb-2 mb-3">
+          <div className="w-44 flex-shrink-0 pr-4">
+            <span className="text-xs text-ink-500 uppercase tracking-wider">
+              工位
+            </span>
+          </div>
+          <div className="flex-1 grid grid-cols-7 gap-1.5">
+            {weekDays.map((date) => {
+              const isToday = isSameDay(date, new Date());
+              return (
+                <div
+                  key={date.toISOString()}
+                  className="text-center cursor-pointer hover:bg-ink-800/50 rounded-md py-1 transition-colors"
+                  onClick={() => onDayClick(date)}
+                >
+                  <div className="text-[10px] uppercase tracking-wider text-ink-500 mb-0.5">
+                    {format(date, "EEE", { locale: zhCN })}
+                  </div>
+                  <div
+                    className={clsx(
+                      "text-sm font-mono",
+                      isToday && "text-darkroom-300 font-bold",
+                    )}
+                  >
+                    {format(date, "MM/dd")}
+                  </div>
+                  {isToday && (
+                    <div className="w-1 h-1 rounded-full bg-darkroom-400 mx-auto mt-0.5" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {stations.map((station) => (
+            <div key={station.id} className="flex items-center h-14 group">
+              <div className="w-44 flex-shrink-0 pr-4">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={clsx(
+                      "status-dot",
+                      getStatusColorClass(station.status),
+                    )}
+                  />
+                  <span className="font-mono text-xs text-darkroom-300">
+                    {station.code}
+                  </span>
+                  <span className="text-sm text-ink-200 truncate">
+                    {station.name}
+                  </span>
+                </div>
+              </div>
+              <div className="flex-1 grid grid-cols-7 gap-1.5">
+                {weekDays.map((date) => {
+                  const { ratio, count, minutes } = getDayOccupancy(
+                    station.id,
+                    date,
+                  );
+                  return (
+                    <div
+                      key={date.toISOString()}
+                      className={clsx(
+                        "relative rounded-md h-12 flex items-center justify-center cursor-pointer transition-all hover:ring-2 hover:ring-darkroom-400/50",
+                        getHeatColor(ratio),
+                        station.status === "maintenance" &&
+                          "bg-status-maintenance/20 border border-dashed border-status-maintenance/40",
+                      )}
+                      onClick={() => onDayClick(date)}
+                      title={`${format(date, "MM月dd日")} ${station.name}
+预约数：${count} 个
+占用时长：${Math.floor(minutes / 60)}小时${minutes % 60}分钟
+利用率：${(ratio * 100).toFixed(0)}%`}
+                    >
+                      {station.status === "maintenance" ? (
+                        <span className="text-[10px] text-red-300">维护</span>
+                      ) : ratio > 0 ? (
+                        <div className="text-center">
+                          <div className="text-xs font-mono text-ink-100 font-medium">
+                            {(ratio * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-[10px] text-ink-400">
+                            {count}单
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-ink-600">—</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between mt-5 pt-4 border-t border-ink-800">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-ink-400">占用密度：</span>
+            <div className="flex items-center gap-1">
+              <span className="w-5 h-4 rounded-sm bg-ink-900/30" />
+              <span className="text-[10px] text-ink-500">空闲</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="w-5 h-4 rounded-sm bg-status-normal/30" />
+              <span className="text-[10px] text-ink-500">较低</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="w-5 h-4 rounded-sm bg-status-normal/50" />
+              <span className="text-[10px] text-ink-500">适中</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="w-5 h-4 rounded-sm bg-darkroom-500/60" />
+              <span className="text-[10px] text-ink-500">较高</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="w-5 h-4 rounded-sm bg-status-occupied/70" />
+              <span className="text-[10px] text-ink-500">繁忙</span>
+            </div>
+          </div>
+          <div className="text-xs text-ink-500">
+            点击任意日期可查看当日详细时间轴
+          </div>
         </div>
       </div>
     </div>
@@ -524,12 +732,18 @@ function CandidateCard({
   candidate,
   rank,
   selected,
+  expanded,
   onSelect,
+  onToggleExpand,
+  topCandidate,
 }: {
   candidate: StationCandidate;
   rank: number;
   selected: boolean;
+  expanded: boolean;
   onSelect: () => void;
+  onToggleExpand: () => void;
+  topCandidate?: StationCandidate;
 }) {
   const {
     station,
@@ -545,117 +759,221 @@ function CandidateCard({
   const typeLabel = (STATION_TYPE_LABELS as Record<StationType, string>)[station.type];
   const statusLabel = (STATION_STATUS_LABELS as Record<StationStatus, string>)[station.status];
 
+  const showComparison = rank > 1 && topCandidate && expanded;
+
+  const getComparisonItems = () => {
+    if (!topCandidate) return [];
+    const items = [];
+    const scoreDiff = (topCandidate.score - score) * 100;
+
+    if (scoreDiff > 0) {
+      items.push({
+        label: "综合评分",
+        top: `${(topCandidate.score * 100).toFixed(0)}分`,
+        current: `${(score * 100).toFixed(0)}分`,
+        diff: `-${scoreDiff.toFixed(0)}分`,
+        worse: true,
+      });
+    }
+
+    const fragDiff = topCandidate.fragmentScore - fragmentScore;
+    if (Math.abs(fragDiff) > 0.01) {
+      items.push({
+        label: "碎片利用",
+        top: topCandidate.fragmentScore > fragmentScore ? "更优" : "较差",
+        current: fragmentScore > topCandidate.fragmentScore ? "更优" : "较差",
+        diff: fragDiff > 0 ? "空档间隙更大" : "空档间隙更小",
+        worse: fragDiff > 0,
+      });
+    }
+
+    const loadDiff = topCandidate.loadScore - loadScore;
+    if (Math.abs(loadDiff) > 0.01) {
+      items.push({
+        label: "负载均衡",
+        top: topCandidate.loadScore > loadScore ? "更均衡" : "负载更高",
+        current: loadScore > topCandidate.loadScore ? "更均衡" : "负载更高",
+        diff: topCandidate.weekLoadHours < weekLoadHours
+          ? `负载高${(weekLoadHours - topCandidate.weekLoadHours).toFixed(1)}h`
+          : `负载低${(topCandidate.weekLoadHours - weekLoadHours).toFixed(1)}h`,
+        worse: topCandidate.weekLoadHours < weekLoadHours,
+      });
+    }
+
+    return items;
+  };
+
+  const comparisonItems = getComparisonItems();
+
   return (
     <div
-      onClick={onSelect}
       className={clsx(
-        "dark-card dark-card-hover p-4 cursor-pointer transition-all duration-200",
+        "dark-card dark-card-hover transition-all duration-200 overflow-hidden",
         selected
           ? "border-darkroom-500 shadow-amber-glow ring-1 ring-darkroom-500/30"
           : "border-ink-800",
       )}
     >
-      <div className="flex items-start gap-4">
-        <div
-          className={clsx(
-            "w-10 h-10 rounded-full flex items-center justify-center font-serif text-lg font-bold flex-shrink-0",
-            rank === 1
-              ? "bg-darkroom-600 text-ink-50 shadow-amber-glow"
-              : rank === 2
-              ? "bg-darkroom-700/70 text-darkroom-200"
-              : rank === 3
-              ? "bg-ink-800 text-ink-300"
-              : "bg-ink-900 text-ink-400",
-          )}
-        >
-          {rank}
+      <div
+        onClick={onSelect}
+        className="p-4 cursor-pointer"
+      >
+        <div className="flex items-start gap-4">
+          <div
+            className={clsx(
+              "w-10 h-10 rounded-full flex items-center justify-center font-serif text-lg font-bold flex-shrink-0",
+              rank === 1
+                ? "bg-darkroom-600 text-ink-50 shadow-amber-glow"
+                : rank === 2
+                ? "bg-darkroom-700/70 text-darkroom-200"
+                : rank === 3
+                ? "bg-ink-800 text-ink-300"
+                : "bg-ink-900 text-ink-400",
+            )}
+          >
+            {rank}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-mono text-sm text-darkroom-300">
+                {station.code}
+              </span>
+              <h4 className="text-base font-serif text-ink-50">{station.name}</h4>
+              <span className={clsx("badge", getStatusBadgeClass(station.status))}>
+                <span
+                  className={clsx("status-dot", getStatusColorClass(station.status))}
+                />
+                {statusLabel}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs text-ink-400 mb-3">
+              <span>{typeLabel}</span>
+              <span>·</span>
+              <span>容量 {station.capacity} 卷</span>
+              <span>·</span>
+              <span>近7日负载 {weekLoadHours.toFixed(1)}h</span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="bg-ink-950/50 rounded-md p-2.5">
+                <div className="flex items-center gap-1 text-[10px] text-ink-500 uppercase tracking-wider mb-1">
+                  <Sparkles className="w-3 h-3" />
+                  综合评分
+                </div>
+                <div className="text-lg font-mono font-bold text-darkroom-300">
+                  {(score * 100).toFixed(0)}
+                </div>
+              </div>
+              <div className="bg-ink-950/50 rounded-md p-2.5">
+                <div className="flex items-center gap-1 text-[10px] text-ink-500 uppercase tracking-wider mb-1">
+                  <Layers className="w-3 h-3" />
+                  碎片评分
+                </div>
+                <div className="text-lg font-mono font-bold text-ink-200">
+                  {(fragmentScore * 100).toFixed(0)}
+                </div>
+              </div>
+              <div className="bg-ink-950/50 rounded-md p-2.5">
+                <div className="flex items-center gap-1 text-[10px] text-ink-500 uppercase tracking-wider mb-1">
+                  <Gauge className="w-3 h-3" />
+                  负载评分
+                </div>
+                <div className="text-lg font-mono font-bold text-ink-200">
+                  {(loadScore * 100).toFixed(0)}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs mb-3">
+              <span className="text-ink-400">前后空闲：</span>
+              <span className="text-ink-200">
+                前 {gapBefore > 0 ? `${gapBefore}分钟` : "—"}
+              </span>
+              <ChevronRight className="w-3 h-3 text-ink-500" />
+              <span className="text-ink-200">
+                后 {gapAfter > 0 ? `${gapAfter}分钟` : "—"}
+              </span>
+            </div>
+
+            <div className="space-y-1.5 bg-ink-950/40 rounded-md p-3">
+              <div className="flex items-center gap-1.5 text-[10px] text-ink-400 uppercase tracking-wider mb-1">
+                <Info className="w-3 h-3 text-darkroom-400" />
+                推荐理由
+              </div>
+              {reasons.map((reason, idx) => (
+                <div
+                  key={idx}
+                  className="text-xs text-ink-300 pl-3 relative before:content-[''] before:absolute before:left-0 before:top-1.5 before:w-1 before:h-1 before:rounded-full before:bg-darkroom-500"
+                >
+                  {reason}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex-shrink-0 flex flex-col items-center gap-2">
+            {selected && <CheckCircle2 className="w-6 h-6 text-darkroom-400" />}
+          </div>
         </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="font-mono text-sm text-darkroom-300">
-              {station.code}
-            </span>
-            <h4 className="text-base font-serif text-ink-50">{station.name}</h4>
-            <span className={clsx("badge", getStatusBadgeClass(station.status))}>
-              <span
-                className={clsx("status-dot", getStatusColorClass(station.status))}
-              />
-              {statusLabel}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3 text-xs text-ink-400 mb-3">
-            <span>{typeLabel}</span>
-            <span>·</span>
-            <span>容量 {station.capacity} 卷</span>
-            <span>·</span>
-            <span>近7日负载 {weekLoadHours.toFixed(1)}h</span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 mb-3">
-            <div className="bg-ink-950/50 rounded-md p-2.5">
-              <div className="flex items-center gap-1 text-[10px] text-ink-500 uppercase tracking-wider mb-1">
-                <Sparkles className="w-3 h-3" />
-                综合评分
-              </div>
-              <div className="text-lg font-mono font-bold text-darkroom-300">
-                {(score * 100).toFixed(0)}
-              </div>
-            </div>
-            <div className="bg-ink-950/50 rounded-md p-2.5">
-              <div className="flex items-center gap-1 text-[10px] text-ink-500 uppercase tracking-wider mb-1">
-                <Layers className="w-3 h-3" />
-                碎片评分
-              </div>
-              <div className="text-lg font-mono font-bold text-ink-200">
-                {(fragmentScore * 100).toFixed(0)}
-              </div>
-            </div>
-            <div className="bg-ink-950/50 rounded-md p-2.5">
-              <div className="flex items-center gap-1 text-[10px] text-ink-500 uppercase tracking-wider mb-1">
-                <Gauge className="w-3 h-3" />
-                负载评分
-              </div>
-              <div className="text-lg font-mono font-bold text-ink-200">
-                {(loadScore * 100).toFixed(0)}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs mb-3">
-            <span className="text-ink-400">前后空闲：</span>
-            <span className="text-ink-200">
-              前 {gapBefore > 0 ? `${gapBefore}分钟` : "—"}
-            </span>
-            <ChevronRight className="w-3 h-3 text-ink-500" />
-            <span className="text-ink-200">
-              后 {gapAfter > 0 ? `${gapAfter}分钟` : "—"}
-            </span>
-          </div>
-
-          <div className="space-y-1.5 bg-ink-950/40 rounded-md p-3">
-            <div className="flex items-center gap-1.5 text-[10px] text-ink-400 uppercase tracking-wider mb-1">
-              <Info className="w-3 h-3 text-darkroom-400" />
-              推荐理由
-            </div>
-            {reasons.map((reason, idx) => (
-              <div
-                key={idx}
-                className="text-xs text-ink-300 pl-3 relative before:content-[''] before:absolute before:left-0 before:top-1.5 before:w-1 before:h-1 before:rounded-full before:bg-darkroom-500"
-              >
-                {reason}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {selected && (
-          <div className="flex-shrink-0">
-            <CheckCircle2 className="w-6 h-6 text-darkroom-400" />
-          </div>
-        )}
       </div>
+
+      {rank > 1 && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpand();
+          }}
+          className="w-full px-4 py-2 border-t border-ink-800 text-xs text-ink-400 hover:text-darkroom-300 hover:bg-ink-800/30 transition-colors flex items-center justify-center gap-1"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="w-3.5 h-3.5" />
+              收起对比
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-3.5 h-3.5" />
+              对比第1名
+            </>
+          )}
+        </button>
+      )}
+
+      {showComparison && (
+        <div className="px-4 pb-4 border-t border-ink-800/60">
+          <div className="pt-3">
+            <div className="flex items-center gap-1.5 text-[10px] text-ink-400 uppercase tracking-wider mb-2">
+              <BarChart2 className="w-3 h-3 text-darkroom-400" />
+              与第1名对比
+            </div>
+            <div className="space-y-2">
+              {comparisonItems.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between text-xs bg-ink-950/50 rounded-md px-3 py-2"
+                >
+                  <span className="text-ink-400">{item.label}</span>
+                  <span
+                    className={clsx(
+                      "font-mono",
+                      item.worse ? "text-status-maintenance" : "text-status-normal",
+                    )}
+                  >
+                    {item.diff}
+                  </span>
+                </div>
+              ))}
+              {comparisonItems.length === 0 && (
+                <div className="text-xs text-ink-500 text-center py-2">
+                  与第1名表现相近
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -685,10 +1003,138 @@ function UnavailableStationItem({
   );
 }
 
+function BookingChemicalFlow({
+  booking,
+  dispatches,
+  wastes,
+  batches,
+}: {
+  booking: Booking;
+  dispatches: DispatchRecord[];
+  wastes: WasteRecord[];
+  batches: ChemicalBatch[];
+}) {
+  const bookingDispatches = dispatches.filter((d) => d.bookingId === booking.id);
+  const bookingWastes = wastes.filter((w) => {
+    return bookingDispatches.some(
+      (d) => d.batchId === w.batchId && d.stationId === w.stationId,
+    );
+  });
+
+  const totalDispatched = bookingDispatches.reduce((sum, d) => sum + d.volume, 0);
+  const totalWasted = bookingWastes.reduce((sum, w) => sum + w.volume, 0);
+
+  if (bookingDispatches.length === 0) {
+    return (
+      <div className="bg-ink-950/40 rounded-md p-4 text-center">
+        <Droplets className="w-8 h-8 text-ink-600 mx-auto mb-2" />
+        <div className="text-sm text-ink-500">暂无药水使用记录</div>
+        <div className="text-xs text-ink-600 mt-1">该预约尚未关联药水出库</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <GitBranch className="w-4 h-4 text-darkroom-400" />
+          <span className="text-sm font-medium text-ink-200">药水流向</span>
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          <span className="text-ink-400">
+            出库：<span className="text-darkroom-200 font-mono">{totalDispatched.toLocaleString()}ml</span>
+          </span>
+          <span className="text-ink-400">
+            已回收：<span className="text-red-300 font-mono">{totalWasted.toLocaleString()}ml</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {bookingDispatches.map((dispatch) => {
+          const batch = batches.find((b) => b.id === dispatch.batchId);
+          const relatedWaste = bookingWastes.filter((w) => w.batchId === dispatch.batchId);
+          return (
+            <div
+              key={dispatch.id}
+              className="bg-ink-950/50 rounded-md p-3 border border-ink-800/60"
+            >
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-darkroom-600/30 flex items-center justify-center">
+                    <Droplets className="w-4 h-4 text-darkroom-300" />
+                  </div>
+                  <div>
+                    <div className="text-sm text-ink-100 font-medium">
+                      {batch?.name || "未知批次"}
+                    </div>
+                    <div className="text-[10px] text-ink-500 font-mono">
+                      {batch?.batchNo || "-"}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-mono text-darkroom-200">
+                    -{dispatch.volume.toLocaleString()}ml
+                  </div>
+                  <div className="text-[10px] text-ink-500">
+                    {formatDateTime(dispatch.dispatchTime)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="flex items-center gap-1.5 text-ink-400">
+                  <User className="w-3 h-3 text-darkroom-400" />
+                  操作人：<span className="text-ink-200">{dispatch.operator}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-ink-400">
+                  <FileText className="w-3 h-3 text-darkroom-400" />
+                  用途：<span className="text-ink-200">{dispatch.purpose}</span>
+                </div>
+              </div>
+
+              {relatedWaste.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-ink-800/40">
+                  <div className="text-[10px] text-ink-500 uppercase tracking-wider mb-2">
+                    废液回收
+                  </div>
+                  <div className="space-y-1.5">
+                    {relatedWaste.map((w) => (
+                      <div
+                        key={w.id}
+                        className="flex items-center justify-between text-xs bg-status-maintenance/10 rounded px-2 py-1.5"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <Recycle className="w-3 h-3 text-status-maintenance" />
+                          <span className="text-ink-300">
+                            {WASTE_TYPE_LABELS[w.type]}
+                          </span>
+                        </div>
+                        <span className="font-mono text-red-300">
+                          {w.volume.toLocaleString()}ml
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function StationsPage() {
   const {
     stations,
     bookings,
+    chemicalBatches,
+    dispatchRecords,
+    wasteRecords,
     addStation,
     updateStation,
     deleteStation,
@@ -701,6 +1147,8 @@ export default function StationsPage() {
   }, [initMockData]);
 
   const [currentDate, setCurrentDate] = useState<Date>(() => startOfToday());
+  const [viewMode, setViewMode] = useState<"week" | "day">("week");
+  const [weekStart, setWeekStart] = useState<Date>(() => startOfToday());
 
   const [showStationModal, setShowStationModal] = useState(false);
   const [editingStation, setEditingStation] = useState<Station | null>(null);
@@ -710,7 +1158,10 @@ export default function StationsPage() {
   const [bookingForm, setBookingForm] = useState<BookingFormData>(defaultBookingForm);
   const [allocationResult, setAllocationResult] = useState<AllocationResult | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null);
+  const [expandedCandidates, setExpandedCandidates] = useState<Set<string>>(new Set());
   const [allocating, setAllocating] = useState(false);
+
+  const [detailBooking, setDetailBooking] = useState<Booking | null>(null);
 
   const handleOpenAddStation = () => {
     setEditingStation(null);
@@ -776,6 +1227,13 @@ export default function StationsPage() {
     const start = new Date(bookingForm.startTime);
     const end = new Date(bookingForm.endTime);
     if (end <= start) return "结束时间必须晚于开始时间";
+
+    const startHour = start.getHours() + start.getMinutes() / 60;
+    const endHour = end.getHours() + end.getMinutes() / 60;
+    if (startHour < 8 || endHour > 22) {
+      return "营业时间为 08:00 - 22:00，请选择营业时间内的时段";
+    }
+
     return null;
   };
 
@@ -846,6 +1304,7 @@ export default function StationsPage() {
   const handleReallocate = () => {
     setAllocationResult(null);
     setSelectedCandidate(null);
+    setExpandedCandidates(new Set());
   };
 
   return (
@@ -898,31 +1357,103 @@ export default function StationsPage() {
 
       <section>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="section-title mb-0">
-            <CalendarDays className="w-5 h-5 text-darkroom-400 mr-2" />
-            <span>排期甘特图</span>
-            <span className="text-sm font-mono text-ink-400 ml-3">
-              {format(currentDate, "yyyy年MM月dd日 EEEE", { locale: zhCN })}
-            </span>
-          </h3>
-          <WeekPicker currentDate={currentDate} onDateChange={setCurrentDate} />
+          <div className="flex items-center gap-3">
+            <h3 className="section-title mb-0">
+              <CalendarDays className="w-5 h-5 text-darkroom-400 mr-2" />
+              <span>排期总览</span>
+            </h3>
+            <div className="flex items-center bg-ink-900/50 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode("week")}
+                className={clsx(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-all",
+                  viewMode === "week"
+                    ? "bg-darkroom-600 text-ink-50"
+                    : "text-ink-400 hover:text-ink-200",
+                )}
+              >
+                <Grid3X3 className="w-3.5 h-3.5" />
+                周视图
+              </button>
+              <button
+                onClick={() => setViewMode("day")}
+                className={clsx(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-all",
+                  viewMode === "day"
+                    ? "bg-darkroom-600 text-ink-50"
+                    : "text-ink-400 hover:text-ink-200",
+                )}
+              >
+                <BarChart2 className="w-3.5 h-3.5" />
+                日视图
+              </button>
+            </div>
+          </div>
+          {viewMode === "week" ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setWeekStart(addDays(weekStart, -7))}
+                className="ghost-btn !p-1.5"
+                title="上一周"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-sm font-mono text-ink-300 min-w-[200px] text-center">
+                {format(weekStart, "MM月dd日", { locale: zhCN })} -{" "}
+                {format(addDays(weekStart, 6), "MM月dd日 yyyy年", { locale: zhCN })}
+              </span>
+              <button
+                onClick={() => setWeekStart(addDays(weekStart, 7))}
+                className="ghost-btn !p-1.5"
+                title="下一周"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  setWeekStart(startOfToday());
+                  setCurrentDate(startOfToday());
+                }}
+                className="ghost-btn text-xs py-1.5 px-3"
+              >
+                今天
+              </button>
+            </div>
+          ) : (
+            <WeekPicker currentDate={currentDate} onDateChange={setCurrentDate} />
+          )}
         </div>
 
         {stations.length === 0 ? (
           <div className="dark-card p-10 text-center text-ink-400">
             请先添加工位后查看排期
           </div>
-        ) : (
-          <GanttChart
+        ) : viewMode === "week" ? (
+          <WeekOverview
             stations={stations}
             bookings={bookings}
-            currentDate={currentDate}
-            onBookingClick={(b) => {
-              alert(
-                `预约详情：\n摄影师：${b.photographer}\n胶卷：${b.filmType} × ${b.filmCount}\n时间：${formatDateTime(b.startTime)} - ${formatTime(b.endTime)}\n状态：${(BOOKING_STATUS_LABELS as Record<Booking["status"], string>)[b.status]}`,
-              );
+            weekStart={weekStart}
+            onDayClick={(date) => {
+              setCurrentDate(date);
+              setViewMode("day");
             }}
           />
+        ) : (
+          <div>
+            <button
+              onClick={() => setViewMode("week")}
+              className="mb-3 flex items-center gap-1 text-xs text-ink-400 hover:text-darkroom-300 transition-colors"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+              返回周视图
+            </button>
+            <GanttChart
+              stations={stations}
+              bookings={bookings}
+              currentDate={currentDate}
+              onBookingClick={(b) => setDetailBooking(b)}
+            />
+          </div>
         )}
       </section>
 
@@ -1146,6 +1677,72 @@ export default function StationsPage() {
           </div>
 
           <div>
+            <label className="label-text">快捷时长</label>
+            <div className="flex flex-wrap gap-2 mt-1.5">
+              {[
+                { label: "1小时", hours: 1 },
+                { label: "2小时", hours: 2 },
+                { label: "3小时", hours: 3 },
+                { label: "4小时", hours: 4 },
+                { label: "半天(6h)", hours: 6 },
+                { label: "全天(14h)", hours: 14 },
+              ].map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => {
+                    if (!bookingForm.startTime) return;
+                    const start = new Date(bookingForm.startTime);
+                    const end = new Date(start.getTime() + opt.hours * 60 * 60 * 1000);
+                    const endHour = end.getHours() + end.getMinutes() / 60;
+                    if (endHour > 22) {
+                      const dayStart = startOfDay(parseISO(bookingForm.startTime));
+                      const endDate = setMinutes(setHours(dayStart, 22), 0);
+                      setBookingForm({
+                        ...bookingForm,
+                        endTime: format(endDate, "yyyy-MM-dd'T'HH:mm"),
+                      });
+                    } else {
+                      setBookingForm({
+                        ...bookingForm,
+                        endTime: format(end, "yyyy-MM-dd'T'HH:mm"),
+                      });
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-md bg-ink-900/60 text-ink-300 hover:bg-darkroom-600/30 hover:text-darkroom-200 transition-colors border border-ink-700/50"
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="label-text">整点开始</label>
+            <div className="flex flex-wrap gap-2 mt-1.5">
+              {[8, 10, 12, 14, 16, 18, 20].map((hour) => (
+                <button
+                  key={hour}
+                  type="button"
+                  onClick={() => {
+                    const dayStart = startOfDay(parseISO(bookingForm.startTime || new Date().toISOString()));
+                    const start = setMinutes(setHours(dayStart, hour), 0);
+                    const end = setMinutes(setHours(dayStart, hour + 2), 0);
+                    setBookingForm({
+                      ...bookingForm,
+                      startTime: format(start, "yyyy-MM-dd'T'HH:mm"),
+                      endTime: format(end, "yyyy-MM-dd'T'HH:mm"),
+                    });
+                  }}
+                  className="text-xs px-2.5 py-1.5 rounded-md bg-ink-900/60 text-ink-400 hover:bg-status-normal/20 hover:text-green-300 transition-colors border border-ink-700/50 font-mono"
+                >
+                  {String(hour).padStart(2, "0")}:00
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
             <label className="label-text">备注</label>
             <textarea
               className="input-field min-h-[60px] resize-none"
@@ -1202,16 +1799,27 @@ export default function StationsPage() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
                   {allocationResult.candidates.map((candidate, idx) => (
                     <CandidateCard
                       key={candidate.station.id}
                       candidate={candidate}
                       rank={idx + 1}
                       selected={selectedCandidate === candidate.station.id}
+                      expanded={expandedCandidates.has(candidate.station.id)}
                       onSelect={() =>
                         setSelectedCandidate(candidate.station.id)
                       }
+                      onToggleExpand={() => {
+                        const next = new Set(expandedCandidates);
+                        if (next.has(candidate.station.id)) {
+                          next.delete(candidate.station.id);
+                        } else {
+                          next.add(candidate.station.id);
+                        }
+                        setExpandedCandidates(next);
+                      }}
+                      topCandidate={allocationResult.candidates[0]}
                     />
                   ))}
                 </div>
@@ -1255,6 +1863,110 @@ export default function StationsPage() {
           )}
         </div>
       </Modal>
+
+      {detailBooking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-ink-950/80 backdrop-blur-sm"
+            onClick={() => setDetailBooking(null)}
+          />
+          <div className="relative dark-card w-full max-w-2xl mx-4 max-h-[85vh] overflow-hidden shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-ink-800 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-darkroom-700/50 flex items-center justify-center border border-darkroom-500/40">
+                  <Camera className="w-5 h-5 text-darkroom-200" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-serif text-ink-50">
+                    {detailBooking.photographer}
+                  </h3>
+                  <p className="text-xs text-ink-400 font-mono">
+                    {detailBooking.filmType} × {detailBooking.filmCount}卷
+                  </p>
+                </div>
+              </div>
+              <button
+                className="ghost-btn !p-1.5"
+                onClick={() => setDetailBooking(null)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="dark-card p-3">
+                  <div className="text-xs text-ink-400 mb-1">状态</div>
+                  <span className={getStatusBadgeClass(detailBooking.status)}>
+                    <span
+                      className={clsx(
+                        "status-dot",
+                        getStatusColorClass(detailBooking.status),
+                      )}
+                    />
+                    {(BOOKING_STATUS_LABELS as Record<Booking["status"], string>)[
+                      detailBooking.status
+                    ]}
+                  </span>
+                </div>
+                <div className="dark-card p-3">
+                  <div className="text-xs text-ink-400 mb-1">使用工位</div>
+                  <div className="text-sm text-ink-100">
+                    {stations.find((s) => s.id === detailBooking.stationId)?.name ||
+                      "-"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="dark-card p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock className="w-4 h-4 text-darkroom-400" />
+                  <span className="text-sm font-medium text-ink-200">预约时间</span>
+                </div>
+                <div className="text-lg font-mono text-ink-100">
+                  {formatDateTime(detailBooking.startTime)}
+                  <span className="mx-2 text-ink-500">→</span>
+                  {formatTime(detailBooking.endTime)}
+                </div>
+                <div className="text-xs text-ink-500 mt-1">
+                  时长{" "}
+                  {differenceInMinutes(
+                    parseISO(detailBooking.endTime),
+                    parseISO(detailBooking.startTime),
+                  )}{" "}
+                  分钟
+                </div>
+              </div>
+
+              {detailBooking.notes && (
+                <div className="dark-card p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <FileText className="w-4 h-4 text-darkroom-400" />
+                    <span className="text-sm font-medium text-ink-200">备注</span>
+                  </div>
+                  <p className="text-sm text-ink-300">{detailBooking.notes}</p>
+                </div>
+              )}
+
+              <BookingChemicalFlow
+                booking={detailBooking}
+                dispatches={dispatchRecords}
+                wastes={wasteRecords}
+                batches={chemicalBatches}
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 px-5 py-4 border-t border-ink-800 flex-shrink-0">
+              <button
+                className="ghost-btn"
+                onClick={() => setDetailBooking(null)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
