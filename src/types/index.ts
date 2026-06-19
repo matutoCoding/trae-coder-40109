@@ -81,6 +81,7 @@ export interface WasteRecord {
   id: string;
   batchId?: string;
   stationId?: string;
+  bookingId?: string;
   volume: number;
   type: WasteType;
   recoveryMethod: RecoveryMethod;

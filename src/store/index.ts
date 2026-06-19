@@ -207,6 +207,7 @@ function createMockDispatches(
 function createMockWaste(
   batches: ChemicalBatch[],
   stations: Station[],
+  bookings: Booking[],
 ): WasteRecord[] {
   const records: WasteRecord[] = [];
   const operators = ["技师老王", "技师小李"];
@@ -221,11 +222,29 @@ function createMockWaste(
     "storage",
   ];
 
+  const dispatches: Array<{
+    batchId: string;
+    stationId: string;
+    bookingId?: string;
+  }> = [];
+  for (let i = 0; i < 10; i++) {
+    const batch = batches[i % batches.length];
+    const station = stations[i % stations.length];
+    const booking = bookings.find((b) => b.stationId === station.id);
+    dispatches.push({
+      batchId: batch.id,
+      stationId: station.id,
+      bookingId: booking?.id,
+    });
+  }
+
   for (let i = 0; i < 6; i++) {
+    const d = dispatches[i % dispatches.length];
     records.push({
       id: uid(),
-      batchId: batches[i % batches.length].id,
-      stationId: stations[i % stations.length].id,
+      batchId: d.batchId,
+      stationId: d.stationId,
+      bookingId: d.bookingId,
       volume: 150 + (i % 3) * 100,
       type: types[i % types.length],
       recoveryMethod: methods[i % methods.length],
@@ -275,6 +294,10 @@ interface AppState {
     data: Omit<WasteRecord, "id" | "createdAt">,
   ) => void;
   deleteWasteRecord: (id: string) => void;
+
+  pendingBookingDetailId: string | null;
+  openBookingDetail: (id: string) => void;
+  clearBookingDetail: () => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -286,6 +309,10 @@ export const useAppStore = create<AppState>()(
       dispatchRecords: [],
       wasteRecords: [],
       initialized: false,
+      pendingBookingDetailId: null,
+
+      openBookingDetail: (id) => set({ pendingBookingDetailId: id }),
+      clearBookingDetail: () => set({ pendingBookingDetailId: null }),
 
       initMockData: () => {
         if (get().initialized) return;
@@ -293,7 +320,7 @@ export const useAppStore = create<AppState>()(
         const bookings = createMockBookings(stations);
         const chemicalBatches = createMockChemicals();
         const dispatchRecords = createMockDispatches(chemicalBatches, stations, bookings);
-        const wasteRecords = createMockWaste(chemicalBatches, stations);
+        const wasteRecords = createMockWaste(chemicalBatches, stations, bookings);
         set({
           stations,
           bookings,

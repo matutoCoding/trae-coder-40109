@@ -21,6 +21,8 @@ import {
   User,
   FileText,
   PackageOpen,
+  Calendar,
+  ExternalLink,
 } from "lucide-react";
 import {
   BarChart,
@@ -47,6 +49,7 @@ import {
   type Station,
 } from "@/types";
 import { useAppStore } from "@/store";
+import { useNavigate } from "react-router-dom";
 import { formatDate, formatTime, formatDateTime, getStatusBadgeClass } from "@/utils";
 
 function getProgressColorClass(status: ChemicalBatch["status"]): string {
@@ -356,6 +359,7 @@ function FlowTimeline({
 }
 
 export default function ChemicalsPage() {
+  const navigate = useNavigate();
   const {
     chemicalBatches,
     dispatchRecords,
@@ -364,6 +368,7 @@ export default function ChemicalsPage() {
     bookings,
     addChemicalBatch,
     deleteChemicalBatch,
+    openBookingDetail,
   } = useAppStore();
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1005,6 +1010,144 @@ export default function ChemicalsPage() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              <div className="dark-card p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-darkroom-400" />
+                    <h4 className="font-serif text-ink-50">预约使用记录</h4>
+                  </div>
+                  <div className="text-xs text-ink-400">
+                    共 {Object.keys(
+                      batchDispatches.reduce(
+                        (acc, d) => (d.bookingId ? { ...acc, [d.bookingId]: true } : acc),
+                        {} as Record<string, true>,
+                      ),
+                    ).length}{" "}
+                    个预约使用过本批次
+                  </div>
+                </div>
+
+                {(() => {
+                  const byBooking = new Map<
+                    string,
+                    {
+                      booking: Booking;
+                      dispatched: number;
+                      wasted: number;
+                      dispatches: DispatchRecord[];
+                    }
+                  >();
+
+                  for (const d of batchDispatches) {
+                    if (!d.bookingId) continue;
+                    const b = bookings.find((x) => x.id === d.bookingId);
+                    if (!b) continue;
+                    const prev = byBooking.get(d.bookingId);
+                    if (prev) {
+                      prev.dispatched += d.volume;
+                      prev.dispatches.push(d);
+                    } else {
+                      byBooking.set(d.bookingId, {
+                        booking: b,
+                        dispatched: d.volume,
+                        wasted: 0,
+                        dispatches: [d],
+                      });
+                    }
+                  }
+
+                  for (const w of batchWastes) {
+                    if (!w.bookingId) continue;
+                    const cur = byBooking.get(w.bookingId);
+                    if (cur) cur.wasted += w.volume;
+                  }
+
+                  const rows = [...byBooking.values()].sort(
+                    (a, b) =>
+                      new Date(b.booking.startTime).getTime() -
+                      new Date(a.booking.startTime).getTime(),
+                  );
+
+                  if (rows.length === 0) {
+                    return (
+                      <div className="py-8 text-center text-sm text-ink-500">
+                        暂无预约使用记录（完成登记后将出现在此处）
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      {rows.map(({ booking, dispatched, wasted }) => {
+                        const station = stations.find(
+                          (s) => s.id === booking.stationId,
+                        );
+                        return (
+                          <div
+                            key={booking.id}
+                            className="p-3 rounded-md bg-ink-950/50 border border-ink-800/60 hover:border-darkroom-600/40 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-sm font-medium text-ink-100">
+                                    {booking.photographer}
+                                  </span>
+                                  <span className="text-xs text-ink-500 font-mono">
+                                    {booking.filmType} × {booking.filmCount}
+                                  </span>
+                                  <span className="text-[10px] text-ink-500 px-1.5 py-0.5 rounded bg-ink-800">
+                                    {station?.code || "-"}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-3 text-xs text-ink-400">
+                                  <span className="font-mono">
+                                    {formatDate(booking.startTime)}
+                                  </span>
+                                  <span className="font-mono">
+                                    {formatTime(booking.startTime)} -{" "}
+                                    {formatTime(booking.endTime)}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3 flex-shrink-0">
+                                <div className="text-right">
+                                  <div className="text-[10px] text-ink-500 uppercase tracking-wider">
+                                    出库
+                                  </div>
+                                  <div className="text-sm font-mono text-darkroom-200">
+                                    {dispatched.toLocaleString()}ml
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-[10px] text-ink-500 uppercase tracking-wider">
+                                    回收
+                                  </div>
+                                  <div className="text-sm font-mono text-red-300">
+                                    {wasted.toLocaleString()}ml
+                                  </div>
+                                </div>
+                                <button
+                                  className="ghost-btn !py-1 !px-2 text-xs flex items-center gap-1"
+                                  onClick={() => {
+                                    openBookingDetail(booking.id);
+                                    navigate("/stations");
+                                  }}
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  查看
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               <FlowTimeline

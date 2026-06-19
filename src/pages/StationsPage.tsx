@@ -439,16 +439,37 @@ function WeekOverview({
 function GanttChart({
   stations,
   bookings,
+  dispatches,
+  wastes,
   currentDate,
   onBookingClick,
 }: {
   stations: Station[];
   bookings: Booking[];
+  dispatches: DispatchRecord[];
+  wastes: WasteRecord[];
   currentDate: Date;
   onBookingClick: (b: Booking) => void;
 }) {
   const [hoverBooking, setHoverBooking] = useState<Booking | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
+
+  const executionState = useMemo(() => {
+    const map = new Map<string, { dispatched: number; wasted: number }>();
+    for (const d of dispatches) {
+      if (!d.bookingId) continue;
+      const prev = map.get(d.bookingId);
+      if (prev) prev.dispatched += d.volume;
+      else map.set(d.bookingId, { dispatched: d.volume, wasted: 0 });
+    }
+    for (const w of wastes) {
+      if (!w.bookingId) continue;
+      const cur = map.get(w.bookingId);
+      if (cur) cur.wasted += w.volume;
+      else map.set(w.bookingId, { dispatched: 0, wasted: w.volume });
+    }
+    return map;
+  }, [dispatches, wastes]);
 
   const getBookingPosition = (booking: Booking) => {
     const start = parseISO(booking.startTime);
@@ -555,6 +576,9 @@ function GanttChart({
 
                   {stationBookings.map((booking) => {
                     const pos = getBookingPosition(booking);
+                    const state = executionState.get(booking.id);
+                    const hasDispatch = state && state.dispatched > 0;
+                    const hasWaste = state && state.wasted > 0;
                     return (
                       <div
                         key={booking.id}
@@ -578,9 +602,23 @@ function GanttChart({
                         }}
                         onMouseLeave={() => setHoverBooking(null)}
                       >
-                        <span className="text-ink-50 px-1.5 truncate text-[11px] whitespace-nowrap">
+                        <span className="text-ink-50 px-1.5 truncate text-[11px] whitespace-nowrap flex-1">
                           {booking.photographer}
                         </span>
+                        <div className="flex items-center gap-0.5 pr-1 flex-shrink-0">
+                          {hasDispatch && (
+                            <span
+                              title={`已出库 ${state!.dispatched.toLocaleString()}ml`}
+                              className="w-2 h-2 rounded-full bg-green-400 border border-ink-900 shadow-sm"
+                            />
+                          )}
+                          {hasWaste && (
+                            <span
+                              title={`已回收 ${state!.wasted.toLocaleString()}ml`}
+                              className="w-2 h-2 rounded-full bg-red-400 border border-ink-900 shadow-sm"
+                            />
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -625,6 +663,34 @@ function GanttChart({
                   <Film className="w-3.5 h-3.5 text-darkroom-400" />
                   {hoverBooking.filmType} × {hoverBooking.filmCount}卷
                 </div>
+                {(() => {
+                  const s = executionState.get(hoverBooking.id);
+                  const hasD = s && s.dispatched > 0;
+                  const hasW = s && s.wasted > 0;
+                  if (!hasD && !hasW) return null;
+                  return (
+                    <div className="flex items-center gap-3 pt-1.5 mt-1.5 border-t border-ink-800">
+                      {hasD && (
+                        <div className="flex items-center gap-1.5 text-ink-300">
+                          <span className="w-2.5 h-2.5 rounded-full bg-green-400" />
+                          已出库
+                          <span className="font-mono text-green-300">
+                            {s!.dispatched.toLocaleString()}ml
+                          </span>
+                        </div>
+                      )}
+                      {hasW && (
+                        <div className="flex items-center gap-1.5 text-ink-300">
+                          <span className="w-2.5 h-2.5 rounded-full bg-red-400" />
+                          已回收
+                          <span className="font-mono text-red-300">
+                            {s!.wasted.toLocaleString()}ml
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 {hoverBooking.notes && (
                   <div className="pt-1.5 mt-1.5 border-t border-ink-800 text-ink-400">
                     {hoverBooking.notes}
@@ -636,7 +702,7 @@ function GanttChart({
         )}
       </div>
 
-      <div className="flex items-center gap-4 mt-5 pt-4 border-t border-ink-800">
+      <div className="flex items-center flex-wrap gap-x-4 gap-y-2 mt-5 pt-4 border-t border-ink-800">
         <div className="flex items-center gap-2">
           <span className="w-3 h-3 rounded-sm bg-status-idle/80 border border-status-idle" />
           <span className="text-xs text-ink-400">已确认</span>
@@ -656,6 +722,15 @@ function GanttChart({
         <div className="flex items-center gap-2">
           <span className="w-3 h-3 rounded-sm border border-dashed border-status-maintenance/50 bg-status-maintenance/20" />
           <span className="text-xs text-ink-400">维护</span>
+        </div>
+        <div className="w-px h-5 bg-ink-700 mx-1" />
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-green-400" />
+          <span className="text-xs text-ink-400">已出库</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-red-400" />
+          <span className="text-xs text-ink-400">已回收</span>
         </div>
       </div>
     </div>
@@ -1040,11 +1115,7 @@ function BookingChemicalFlow({
   batches: ChemicalBatch[];
 }) {
   const bookingDispatches = dispatches.filter((d) => d.bookingId === booking.id);
-  const bookingWastes = wastes.filter((w) => {
-    return bookingDispatches.some(
-      (d) => d.batchId === w.batchId && d.stationId === w.stationId,
-    );
-  });
+  const bookingWastes = wastes.filter((w) => w.bookingId === booking.id);
 
   const totalDispatched = bookingDispatches.reduce((sum, d) => sum + d.volume, 0);
   const totalWasted = bookingWastes.reduce((sum, w) => sum + w.volume, 0);
@@ -1054,7 +1125,7 @@ function BookingChemicalFlow({
       <div className="bg-ink-950/40 rounded-md p-4 text-center">
         <Droplets className="w-8 h-8 text-ink-600 mx-auto mb-2" />
         <div className="text-sm text-ink-500">暂无药水使用记录</div>
-        <div className="text-xs text-ink-600 mt-1">该预约尚未关联药水出库</div>
+        <div className="text-xs text-ink-600 mt-1">待完成登记后将显示本次冲洗的药水流向</div>
       </div>
     );
   }
@@ -1064,7 +1135,7 @@ function BookingChemicalFlow({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-darkroom-400" />
-          <span className="text-sm font-medium text-ink-200">药水流向</span>
+          <span className="text-sm font-medium text-ink-200">本次冲洗药水流向</span>
         </div>
         <div className="flex items-center gap-3 text-xs">
           <span className="text-ink-400">
@@ -1094,8 +1165,22 @@ function BookingChemicalFlow({
                     <div className="text-sm text-ink-100 font-medium">
                       {batch?.name || "未知批次"}
                     </div>
-                    <div className="text-[10px] text-ink-500 font-mono">
-                      {batch?.batchNo || "-"}
+                    <div className="flex items-center gap-2 text-[10px] text-ink-500 font-mono">
+                      <span>{batch?.batchNo || "-"}</span>
+                      {batch && (
+                        <span
+                          className={clsx(
+                            "px-1.5 py-0.5 rounded",
+                            batch.type === "developer" && "bg-green-900/30 text-green-300",
+                            batch.type === "fixer" && "bg-blue-900/30 text-blue-300",
+                            batch.type === "bleach" && "bg-yellow-900/30 text-yellow-300",
+                            batch.type === "stop_bath" && "bg-purple-900/30 text-purple-300",
+                            batch.type === "wetting_agent" && "bg-cyan-900/30 text-cyan-300",
+                          )}
+                        >
+                          {CHEMICAL_TYPE_LABELS[batch.type]}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1131,10 +1216,13 @@ function BookingChemicalFlow({
                         key={w.id}
                         className="flex items-center justify-between text-xs bg-status-maintenance/10 rounded px-2 py-1.5"
                       >
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-2">
                           <Recycle className="w-3 h-3 text-status-maintenance" />
                           <span className="text-ink-300">
                             {WASTE_TYPE_LABELS[w.type]}
+                          </span>
+                          <span className="text-ink-500 text-[10px]">
+                            · {RECOVERY_METHOD_LABELS[w.recoveryMethod]}
                           </span>
                         </div>
                         <span className="font-mono text-red-300">
@@ -1168,7 +1256,21 @@ export default function StationsPage() {
     addDispatchRecord,
     addWasteRecord,
     initMockData,
+    pendingBookingDetailId,
+    clearBookingDetail,
   } = useAppStore();
+
+  useEffect(() => {
+    if (pendingBookingDetailId) {
+      const b = bookings.find((x) => x.id === pendingBookingDetailId);
+      if (b) {
+        setDetailBooking(b);
+        setCurrentDate(startOfDay(parseISO(b.startTime)));
+        setViewMode("day");
+      }
+      clearBookingDetail();
+    }
+  }, [pendingBookingDetailId, bookings, clearBookingDetail]);
 
   useEffect(() => {
     initMockData();
@@ -1192,14 +1294,29 @@ export default function StationsPage() {
 
   const [detailBooking, setDetailBooking] = useState<Booking | null>(null);
   const [showCompletionForm, setShowCompletionForm] = useState(false);
-  const [completionData, setCompletionData] = useState({
+  const [completionOperator, setCompletionOperator] = useState("");
+
+  interface ChemicalUsageItem {
+    id: string;
+    batchId: string;
+    volume: string;
+    wasteVolume: string;
+    wasteType: WasteType;
+    recoveryMethod: RecoveryMethod;
+  }
+
+  const emptyUsageItem = (): ChemicalUsageItem => ({
+    id: Math.random().toString(36).slice(2, 9),
     batchId: "",
     volume: "",
-    operator: "",
     wasteVolume: "",
-    wasteType: "developer_waste" as WasteType,
-    recoveryMethod: "professional" as RecoveryMethod,
+    wasteType: "developer_waste",
+    recoveryMethod: "professional",
   });
+
+  const [completionItems, setCompletionItems] = useState<ChemicalUsageItem[]>([
+    emptyUsageItem(),
+  ]);
 
   const liveDetailBooking = useMemo(() => {
     if (!detailBooking) return null;
@@ -1274,14 +1391,23 @@ export default function StationsPage() {
     const end = new Date(bookingForm.endTime);
     if (end <= start) return "结束时间必须晚于开始时间";
 
+    if (!isSameDay(start, end)) {
+      return "预约不可跨天，开始和结束必须在同一天";
+    }
+
     const startHour = start.getHours() + start.getMinutes() / 60;
     const endHour = end.getHours() + end.getMinutes() / 60;
-    if (startHour < 8 || endHour > 22) {
-      return "营业时间为 08:00 - 22:00，请选择营业时间内的时段";
+    if (startHour < 8) {
+      return `营业时间为 08:00 - 22:00，当前开始时间 ${formatTime(start.toISOString())} 过早`;
+    }
+    if (endHour > 22) {
+      return `营业时间为 08:00 - 22:00，当前结束时间 ${formatTime(end.toISOString())} 过晚`;
     }
 
     return null;
   };
+
+  const formError = useMemo(() => validateBookingForm(), [bookingForm]);
 
   const handleFindBestStation = () => {
     const err = validateBookingForm();
@@ -1510,6 +1636,8 @@ export default function StationsPage() {
             <GanttChart
               stations={stations}
               bookings={bookings}
+              dispatches={dispatchRecords}
+              wastes={wasteRecords}
               currentDate={currentDate}
               onBookingClick={(b) => setDetailBooking(b)}
             />
@@ -1707,7 +1835,11 @@ export default function StationsPage() {
               </label>
               <input
                 type="datetime-local"
-                className="input-field"
+                className={clsx(
+                  "input-field",
+                  formError && /开始时间|过早/.test(formError) &&
+                    "border-status-expired focus:border-status-expired",
+                )}
                 value={bookingForm.startTime}
                 onChange={(e) =>
                   setBookingForm({
@@ -1724,7 +1856,11 @@ export default function StationsPage() {
               </label>
               <input
                 type="datetime-local"
-                className="input-field"
+                className={clsx(
+                  "input-field",
+                  formError && /结束时间|过晚|晚于|跨天/.test(formError) &&
+                    "border-status-expired focus:border-status-expired",
+                )}
                 value={bookingForm.endTime}
                 onChange={(e) =>
                   setBookingForm({
@@ -1735,6 +1871,13 @@ export default function StationsPage() {
               />
             </div>
           </div>
+
+          {formError && (bookingForm.startTime || bookingForm.endTime) && (
+            <div className="flex items-start gap-2 p-2.5 rounded-md bg-status-expired/10 border border-status-expired/40">
+              <AlertCircle className="w-4 h-4 text-status-expired flex-shrink-0 mt-0.5" />
+              <div className="text-xs text-status-expired">{formError}</div>
+            </div>
+          )}
 
           <div>
             <label className="label-text">快捷时长</label>
@@ -2035,204 +2178,256 @@ export default function StationsPage() {
 
               {showCompletionForm && (
                 <div className="dark-card p-4 border border-darkroom-500/40">
-                  <div className="flex items-center gap-2 mb-4">
-                    <StopCircle className="w-4 h-4 text-darkroom-400" />
-                    <span className="text-sm font-medium text-ink-200">
-                      完成登记 — 记录实际冲洗用量和废液回收
-                    </span>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <StopCircle className="w-4 h-4 text-darkroom-400" />
+                      <span className="text-sm font-medium text-ink-200">
+                        完成登记 — 记录冲洗药水用量与废液回收
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                        操作人
+                      </label>
+                      <input
+                        type="text"
+                        className="input-field !py-1 !px-2 text-xs w-28"
+                        placeholder="操作人"
+                        value={completionOperator}
+                        onChange={(e) => setCompletionOperator(e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-4">
-                    <div className="p-3 rounded-md bg-ink-950/50 border border-ink-800">
-                      <div className="text-xs text-ink-400 mb-2">冲洗药水用量</div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
-                            选择批次
-                          </label>
-                          <select
-                            className="input-field mt-1"
-                            value={completionData.batchId}
-                            onChange={(e) =>
-                              setCompletionData({
-                                ...completionData,
-                                batchId: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="">-- 选择批次 --</option>
-                            {chemicalBatches
-                              .filter(
-                                (b) =>
-                                  b.remainingVolume > 0 && b.status !== "expired",
-                              )
-                              .map((batch) => (
-                                <option key={batch.id} value={batch.id}>
-                                  {batch.name} ({CHEMICAL_TYPE_LABELS[batch.type]})
-                                  - 剩余{batch.remainingVolume.toLocaleString()}ml
-                                </option>
-                              ))}
-                          </select>
+
+                  <div className="space-y-3">
+                    {completionItems.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="p-3 rounded-md bg-ink-950/50 border border-ink-800 relative"
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-full bg-darkroom-600/50 text-darkroom-200 flex items-center justify-center text-xs font-mono">
+                              {idx + 1}
+                            </span>
+                            <span className="text-xs text-ink-300 font-medium">
+                              药水
+                            </span>
+                          </div>
+                          {completionItems.length > 1 && (
+                            <button
+                              className="text-xs text-ink-500 hover:text-status-expired transition-colors"
+                              onClick={() =>
+                                setCompletionItems(
+                                  completionItems.filter((i) => i.id !== item.id),
+                                )
+                              }
+                            >
+                              移除
+                            </button>
+                          )}
                         </div>
-                        <div>
-                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
-                            使用量 (ml)
-                          </label>
-                          <input
-                            type="number"
-                            className="input-field mt-1"
-                            placeholder="出库量"
-                            min={1}
-                            value={completionData.volume}
-                            onChange={(e) =>
-                              setCompletionData({
-                                ...completionData,
-                                volume: e.target.value,
-                              })
-                            }
-                          />
+
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div>
+                            <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                              选择批次
+                            </label>
+                            <select
+                              className="input-field mt-1 !py-1.5"
+                              value={item.batchId}
+                              onChange={(e) => {
+                                const next = [...completionItems];
+                                next[idx] = { ...item, batchId: e.target.value };
+                                setCompletionItems(next);
+                              }}
+                            >
+                              <option value="">-- 选择批次 --</option>
+                              {chemicalBatches
+                                .filter(
+                                  (b) =>
+                                    b.remainingVolume > 0 && b.status !== "expired",
+                                )
+                                .map((batch) => (
+                                  <option key={batch.id} value={batch.id}>
+                                    {batch.name} (
+                                    {CHEMICAL_TYPE_LABELS[batch.type]}) - 剩余
+                                    {batch.remainingVolume.toLocaleString()}ml
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                              使用量 (ml)
+                            </label>
+                            <input
+                              type="number"
+                              className="input-field mt-1 !py-1.5"
+                              placeholder="出库量"
+                              min={1}
+                              value={item.volume}
+                              onChange={(e) => {
+                                const next = [...completionItems];
+                                next[idx] = { ...item, volume: e.target.value };
+                                setCompletionItems(next);
+                              }}
+                            />
+                          </div>
                         </div>
-                        <div className="col-span-2">
-                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
-                            操作人
-                          </label>
-                          <input
-                            type="text"
-                            className="input-field mt-1"
-                            placeholder="登记操作人"
-                            value={completionData.operator}
-                            onChange={(e) =>
-                              setCompletionData({
-                                ...completionData,
-                                operator: e.target.value,
-                              })
-                            }
-                          />
+
+                        <div className="p-2.5 rounded-md bg-status-maintenance/5 border border-dashed border-ink-700/60">
+                          <div className="text-[10px] text-ink-500 uppercase tracking-wider mb-2">
+                            对应废液回收
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-[9px] text-ink-500 uppercase tracking-wider">
+                                回收量(ml)
+                              </label>
+                              <input
+                                type="number"
+                                className="input-field mt-0.5 !py-1 text-xs"
+                                placeholder="0 = 暂不"
+                                min={0}
+                                value={item.wasteVolume}
+                                onChange={(e) => {
+                                  const next = [...completionItems];
+                                  next[idx] = { ...item, wasteVolume: e.target.value };
+                                  setCompletionItems(next);
+                                }}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] text-ink-500 uppercase tracking-wider">
+                                废液类型
+                              </label>
+                              <select
+                                className="input-field mt-0.5 !py-1 text-xs"
+                                value={item.wasteType}
+                                onChange={(e) => {
+                                  const next = [...completionItems];
+                                  next[idx] = {
+                                    ...item,
+                                    wasteType: e.target.value as WasteType,
+                                  };
+                                  setCompletionItems(next);
+                                }}
+                              >
+                                {Object.entries(WASTE_TYPE_LABELS).map(([k, v]) => (
+                                  <option key={k} value={k}>
+                                    {v}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[9px] text-ink-500 uppercase tracking-wider">
+                                回收方式
+                              </label>
+                              <select
+                                className="input-field mt-0.5 !py-1 text-xs"
+                                value={item.recoveryMethod}
+                                onChange={(e) => {
+                                  const next = [...completionItems];
+                                  next[idx] = {
+                                    ...item,
+                                    recoveryMethod: e.target.value as RecoveryMethod,
+                                  };
+                                  setCompletionItems(next);
+                                }}
+                              >
+                                {Object.entries(RECOVERY_METHOD_LABELS).map(
+                                  ([k, v]) => (
+                                    <option key={k} value={k}>
+                                      {v}
+                                    </option>
+                                  ),
+                                )}
+                              </select>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ))}
+                  </div>
 
-                    <div className="p-3 rounded-md bg-ink-950/50 border border-ink-800">
-                      <div className="text-xs text-ink-400 mb-2">废液回收</div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
-                            回收量 (ml)
-                          </label>
-                          <input
-                            type="number"
-                            className="input-field mt-1"
-                            placeholder="0 = 暂不回收"
-                            min={0}
-                            value={completionData.wasteVolume}
-                            onChange={(e) =>
-                              setCompletionData({
-                                ...completionData,
-                                wasteVolume: e.target.value,
-                              })
-                            }
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
-                            废液类型
-                          </label>
-                          <select
-                            className="input-field mt-1"
-                            value={completionData.wasteType}
-                            onChange={(e) =>
-                              setCompletionData({
-                                ...completionData,
-                                wasteType: e.target.value as WasteType,
-                              })
-                            }
-                          >
-                            {Object.entries(WASTE_TYPE_LABELS).map(([k, v]) => (
-                              <option key={k} value={k}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="col-span-2">
-                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
-                            回收方式
-                          </label>
-                          <select
-                            className="input-field mt-1"
-                            value={completionData.recoveryMethod}
-                            onChange={(e) =>
-                              setCompletionData({
-                                ...completionData,
-                                recoveryMethod: e.target.value as RecoveryMethod,
-                              })
-                            }
-                          >
-                            {Object.entries(RECOVERY_METHOD_LABELS).map(([k, v]) => (
-                              <option key={k} value={k}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCompletionItems([...completionItems, emptyUsageItem()])
+                    }
+                    className="w-full mt-3 py-2 rounded-md border border-dashed border-ink-700 text-ink-400 text-xs hover:text-darkroom-300 hover:border-darkroom-600/50 transition-colors"
+                  >
+                    + 添加另一种药水
+                  </button>
 
-                    <div className="flex items-center gap-3">
-                      <button
-                        className="amber-btn flex items-center gap-1.5"
-                        onClick={() => {
-                          const batch = completionData.batchId;
-                          const vol = Number(completionData.volume);
+                  <div className="flex items-center gap-3 mt-5 pt-3 border-t border-ink-800/60">
+                    <button
+                      className="amber-btn flex items-center gap-1.5"
+                      onClick={() => {
+                        const op = completionOperator.trim() || "系统";
+                        const now = new Date().toISOString();
 
-                          if (batch && vol > 0) {
-                            const selectedBatch = chemicalBatches.find(
-                              (b) => b.id === batch,
+                        for (const item of completionItems) {
+                          const vol = Number(item.volume);
+                          if (!item.batchId || vol <= 0) continue;
+
+                          const batch = chemicalBatches.find(
+                            (b) => b.id === item.batchId,
+                          );
+                          if (batch && vol > batch.remainingVolume) {
+                            alert(
+                              `批次「${batch.name}」出库量(${vol}ml)超过剩余量(${batch.remainingVolume}ml)`,
                             );
-                            if (selectedBatch && vol > selectedBatch.remainingVolume) {
-                              alert("出库量超过批次剩余量");
-                              return;
-                            }
-                            addDispatchRecord({
-                              batchId: batch,
-                              volume: vol,
-                              stationId: liveDetailBooking.stationId,
-                              bookingId: liveDetailBooking.id,
-                              operator: completionData.operator || "系统",
-                              dispatchTime: new Date().toISOString(),
-                              purpose: `${liveDetailBooking.photographer} - ${liveDetailBooking.filmType}冲洗`,
-                            });
+                            return;
                           }
 
-                          const wasteVol = Number(completionData.wasteVolume);
-                          if (wasteVol > 0 && batch) {
-                            addWasteRecord({
-                              batchId: batch,
-                              stationId: liveDetailBooking.stationId,
-                              volume: wasteVol,
-                              type: completionData.wasteType,
-                              recoveryMethod: completionData.recoveryMethod,
-                              operator: completionData.operator || "系统",
-                              recoveryTime: new Date().toISOString(),
-                            });
-                          }
-
-                          updateBooking(liveDetailBooking.id, {
-                            status: "completed",
+                          addDispatchRecord({
+                            batchId: item.batchId,
+                            volume: vol,
+                            stationId: liveDetailBooking!.stationId,
+                            bookingId: liveDetailBooking!.id,
+                            operator: op,
+                            dispatchTime: now,
+                            purpose: `${liveDetailBooking!.photographer} - ${liveDetailBooking!.filmType}冲洗`,
                           });
-                          setShowCompletionForm(false);
-                          setDetailBooking(null);
-                        }}
-                      >
-                        <CheckCircle className="w-4 h-4" />
-                        确认完成
-                      </button>
-                      <button
-                        className="ghost-btn"
-                        onClick={() => setShowCompletionForm(false)}
-                      >
-                        取消
-                      </button>
-                    </div>
+
+                          const wasteVol = Number(item.wasteVolume);
+                          if (wasteVol > 0) {
+                            addWasteRecord({
+                              batchId: item.batchId,
+                              stationId: liveDetailBooking!.stationId,
+                              bookingId: liveDetailBooking!.id,
+                              volume: wasteVol,
+                              type: item.wasteType,
+                              recoveryMethod: item.recoveryMethod,
+                              operator: op,
+                              recoveryTime: now,
+                            });
+                          }
+                        }
+
+                        updateBooking(liveDetailBooking!.id, {
+                          status: "completed",
+                        });
+                        setShowCompletionForm(false);
+                        setCompletionItems([emptyUsageItem()]);
+                        setCompletionOperator("");
+                      }}
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                      确认完成
+                    </button>
+                    <button
+                      className="ghost-btn"
+                      onClick={() => {
+                        setShowCompletionForm(false);
+                        setCompletionItems([emptyUsageItem()]);
+                      }}
+                    >
+                      取消
+                    </button>
                   </div>
                 </div>
               )}
