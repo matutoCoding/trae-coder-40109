@@ -31,13 +31,21 @@ import {
   Legend,
 } from "recharts";
 import { clsx } from "clsx";
-import { parseISO, startOfToday, startOfMonth, isSameDay, isAfter } from "date-fns";
+import {
+  parseISO,
+  startOfToday,
+  startOfMonth,
+  isSameDay,
+  isAfter,
+  addHours,
+  isBefore,
+  differenceInHours,
+} from "date-fns";
 import {
   CHEMICAL_TYPE_LABELS,
 } from "@/types";
 import { useAppStore } from "@/store";
 import { formatDateTime } from "@/utils";
-
 const PIE_COLORS = ["#b8860b", "#2c5f2d", "#c0392b", "#8B4513", "#6b7280", "#5e4fa2"];
 
 interface FormData {
@@ -160,6 +168,24 @@ export default function DispatchPage() {
 
   const getStationName = (stationId?: string) =>
     stationId ? stations.find((s) => s.id === stationId)?.name || "-" : "-";
+
+  const nearbyBookings = useMemo(() => {
+    if (!formData.stationId) return [];
+    const now = new Date();
+    return bookings
+      .filter((b) => {
+        if (b.status === "cancelled" || b.status === "completed") return false;
+        if (b.stationId !== formData.stationId) return false;
+        const bStart = parseISO(b.startTime);
+        const hoursDiff = Math.abs(differenceInHours(bStart, now));
+        return hoursDiff <= 72;
+      })
+      .sort((a, b) => {
+        const aDiff = Math.abs(differenceInHours(parseISO(a.startTime), new Date()));
+        const bDiff = Math.abs(differenceInHours(parseISO(b.startTime), new Date()));
+        return aDiff - bDiff;
+      });
+  }, [bookings, formData.stationId]);
 
   const validateForm = (): boolean => {
     const errors: FormErrors = {};
@@ -405,7 +431,7 @@ export default function DispatchPage() {
                   )}
                   value={formData.stationId}
                   onChange={(e) => {
-                    setFormData({ ...formData, stationId: e.target.value });
+                    setFormData({ ...formData, stationId: e.target.value, bookingId: "" });
                     if (formErrors.stationId) {
                       setFormErrors({ ...formErrors, stationId: undefined });
                     }
@@ -433,20 +459,24 @@ export default function DispatchPage() {
                   className="input-field"
                   value={formData.bookingId}
                   onChange={(e) => setFormData({ ...formData, bookingId: e.target.value })}
+                  disabled={!formData.stationId}
                 >
-                  <option value="">-- 不关联 --</option>
-                  {bookings
-                    .filter((b) => b.status !== "cancelled" && b.status !== "completed")
-                    .map((booking) => {
-                      const station = stations.find((s) => s.id === booking.stationId);
-                      return (
-                        <option key={booking.id} value={booking.id}>
-                          {booking.photographer} - {booking.filmType} (
-                          {station?.code || "-"})
-                        </option>
-                      );
-                    })}
+                  <option value="">-- {formData.stationId ? "不关联" : "请先选择工位"} --</option>
+                  {nearbyBookings.map((booking) => {
+                    const station = stations.find((s) => s.id === booking.stationId);
+                    return (
+                      <option key={booking.id} value={booking.id}>
+                        {booking.photographer} - {booking.filmType} (
+                        {station?.code || "-"}) {formatDateTime(booking.startTime)}
+                      </option>
+                    );
+                  })}
                 </select>
+                {formData.stationId && nearbyBookings.length === 0 && (
+                  <p className="text-xs text-ink-500 mt-1">
+                    该工位附近72小时内无预约
+                  </p>
+                )}
               </div>
             </div>
 

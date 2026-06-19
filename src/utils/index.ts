@@ -312,10 +312,10 @@ export function findBestStation(
     }
 
     const fragmentScore = hasNeighbors
-      ? Math.min(1, (Math.min(gapBefore, 120) + Math.min(gapAfter, 120)) / 240)
-      : 0.3;
+      ? 1 - Math.min(1, (Math.min(gapBefore, 120) + Math.min(gapAfter, 120)) / 240)
+      : 0.15;
 
-    const score = fragmentScore * 0.6 + loadScore * 0.4;
+    const score = fragmentScore * 0.65 + loadScore * 0.35;
 
     candidates.push({
       station,

@@ -28,6 +28,9 @@ import {
   Recycle,
   GitBranch,
   FileText,
+  PlayCircle,
+  StopCircle,
+  AlertTriangle,
 } from "lucide-react";
 import {
   setHours,
@@ -59,17 +62,23 @@ import type {
   StationStatus,
   StationCandidate,
   ChemicalBatch,
+  ChemicalType,
   DispatchRecord,
   WasteRecord,
+  WasteType,
+  RecoveryMethod,
 } from "@/types";
 import {
   STATION_TYPE_LABELS,
   STATION_STATUS_LABELS,
   BOOKING_STATUS_LABELS,
   WASTE_TYPE_LABELS,
+  RECOVERY_METHOD_LABELS,
+  CHEMICAL_TYPE_LABELS,
 } from "@/types";
 
-const HOURS = Array.from({ length: 15 }, (_, i) => 8 + i);
+const HOUR_SLOTS = 14;
+const HOURS = Array.from({ length: HOUR_SLOTS + 1 }, (_, i) => 8 + i);
 const DAY_START = 8;
 const DAY_END = 22;
 const TOTAL_MINUTES = (DAY_END - DAY_START) * 60;
@@ -482,15 +491,22 @@ function GanttChart({
               工位
             </span>
           </div>
-          <div className="flex-1 flex">
-            {HOURS.map((h) => (
-              <div
-                key={h}
-                className="flex-1 text-center text-xs text-ink-500 font-mono"
-              >
-                {String(h).padStart(2, "0")}:00
-              </div>
-            ))}
+          <div className="flex-1 relative" style={{ height: 20 }}>
+            {HOURS.map((h) => {
+              const leftPct = ((h - DAY_START) / HOUR_SLOTS) * 100;
+              return (
+                <div
+                  key={h}
+                  className="absolute text-xs text-ink-500 font-mono"
+                  style={{
+                    left: `${leftPct}%`,
+                    transform: "translateX(-50%)",
+                  }}
+                >
+                  {String(h).padStart(2, "0")}:00
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -518,15 +534,16 @@ function GanttChart({
                   </div>
                 </div>
                 <div className="flex-1 relative h-10 bg-ink-950/60 rounded-md border border-ink-800/50">
-                  <div className="absolute inset-0 flex">
-                    {HOURS.slice(1).map((h) => (
+                  {HOURS.slice(0, -1).map((h) => {
+                    const leftPct = ((h - DAY_START) / HOUR_SLOTS) * 100;
+                    return (
                       <div
                         key={h}
-                        className="h-full border-l border-ink-800/30"
-                        style={{ width: `${100 / HOURS.length}%` }}
+                        className="absolute top-0 bottom-0 border-l border-ink-800/30"
+                        style={{ left: `${leftPct}%` }}
                       />
-                    ))}
-                  </div>
+                    );
+                  })}
 
                   {station.status === "maintenance" && (
                     <div
@@ -764,39 +781,47 @@ function CandidateCard({
   const getComparisonItems = () => {
     if (!topCandidate) return [];
     const items = [];
-    const scoreDiff = (topCandidate.score - score) * 100;
-
-    if (scoreDiff > 0) {
-      items.push({
-        label: "综合评分",
-        top: `${(topCandidate.score * 100).toFixed(0)}分`,
-        current: `${(score * 100).toFixed(0)}分`,
-        diff: `-${scoreDiff.toFixed(0)}分`,
-        worse: true,
-      });
-    }
 
     const fragDiff = topCandidate.fragmentScore - fragmentScore;
-    if (Math.abs(fragDiff) > 0.01) {
+    if (Math.abs(fragDiff) > 0.02) {
+      const topGap = topCandidate.gapBefore + topCandidate.gapAfter;
+      const curGap = gapBefore + gapAfter;
       items.push({
         label: "碎片利用",
-        top: topCandidate.fragmentScore > fragmentScore ? "更优" : "较差",
-        current: fragmentScore > topCandidate.fragmentScore ? "更优" : "较差",
-        diff: fragDiff > 0 ? "空档间隙更大" : "空档间隙更小",
+        diff: fragDiff > 0
+          ? `前后间隙更大（总隙${curGap}分钟 vs ${topGap}分钟）`
+          : `前后间隙更小（总隙${curGap}分钟 vs ${topGap}分钟）`,
         worse: fragDiff > 0,
       });
     }
 
-    const loadDiff = topCandidate.loadScore - loadScore;
-    if (Math.abs(loadDiff) > 0.01) {
+    const loadDiff = weekLoadHours - topCandidate.weekLoadHours;
+    if (Math.abs(loadDiff) > 0.5) {
       items.push({
         label: "负载均衡",
-        top: topCandidate.loadScore > loadScore ? "更均衡" : "负载更高",
-        current: loadScore > topCandidate.loadScore ? "更均衡" : "负载更高",
-        diff: topCandidate.weekLoadHours < weekLoadHours
-          ? `负载高${(weekLoadHours - topCandidate.weekLoadHours).toFixed(1)}h`
-          : `负载低${(topCandidate.weekLoadHours - weekLoadHours).toFixed(1)}h`,
-        worse: topCandidate.weekLoadHours < weekLoadHours,
+        diff: loadDiff > 0
+          ? `7日负载更高（${weekLoadHours.toFixed(1)}h vs ${topCandidate.weekLoadHours.toFixed(1)}h）`
+          : `7日负载更低（${weekLoadHours.toFixed(1)}h vs ${topCandidate.weekLoadHours.toFixed(1)}h）`,
+        worse: loadDiff > 0,
+      });
+    }
+
+    const scoreDiff = (topCandidate.score - score) * 100;
+    if (scoreDiff > 2) {
+      items.push({
+        label: "综合评分",
+        diff: `低${scoreDiff.toFixed(0)}分（${(score * 100).toFixed(0)} vs ${(topCandidate.score * 100).toFixed(0)}）`,
+        worse: true,
+      });
+    }
+
+    const topHasAdj = topCandidate.hasAdjacentBooking;
+    const curHasAdj = candidate.hasAdjacentBooking;
+    if (topHasAdj && !curHasAdj) {
+      items.push({
+        label: "相邻预约",
+        diff: "第1名有相邻预约衔接，本候选独立空档",
+        worse: true,
       });
     }
 
@@ -1139,6 +1164,9 @@ export default function StationsPage() {
     updateStation,
     deleteStation,
     addBooking,
+    updateBooking,
+    addDispatchRecord,
+    addWasteRecord,
     initMockData,
   } = useAppStore();
 
@@ -1160,8 +1188,26 @@ export default function StationsPage() {
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null);
   const [expandedCandidates, setExpandedCandidates] = useState<Set<string>>(new Set());
   const [allocating, setAllocating] = useState(false);
+  const [allocatedTimeKey, setAllocatedTimeKey] = useState<string>("");
 
   const [detailBooking, setDetailBooking] = useState<Booking | null>(null);
+  const [showCompletionForm, setShowCompletionForm] = useState(false);
+  const [completionData, setCompletionData] = useState({
+    batchId: "",
+    volume: "",
+    operator: "",
+    wasteVolume: "",
+    wasteType: "developer_waste" as WasteType,
+    recoveryMethod: "professional" as RecoveryMethod,
+  });
+
+  const liveDetailBooking = useMemo(() => {
+    if (!detailBooking) return null;
+    return bookings.find((b) => b.id === detailBooking.id) || detailBooking;
+  }, [detailBooking, bookings]);
+
+  const currentTimeKey = `${bookingForm.startTime}|${bookingForm.endTime}`;
+  const timeChangedAfterAllocation = allocationResult !== null && allocatedTimeKey !== "" && allocatedTimeKey !== currentTimeKey;
 
   const handleOpenAddStation = () => {
     setEditingStation(null);
@@ -1253,6 +1299,7 @@ export default function StationsPage() {
       );
       setAllocationResult(result);
       setSelectedCandidate(result.candidates.length > 0 ? result.candidates[0].station.id : null);
+      setAllocatedTimeKey(`${bookingForm.startTime}|${bookingForm.endTime}`);
       setAllocating(false);
     }, 500);
   };
@@ -1260,6 +1307,17 @@ export default function StationsPage() {
   const handleConfirmBooking = () => {
     if (!selectedCandidate) {
       alert("请先选择一个工位");
+      return;
+    }
+
+    const validationErr = validateBookingForm();
+    if (validationErr) {
+      alert(validationErr);
+      return;
+    }
+
+    if (timeChangedAfterAllocation) {
+      alert("时间已修改，请重新分配工位后再确认");
       return;
     }
 
@@ -1298,6 +1356,7 @@ export default function StationsPage() {
     });
 
     setCurrentDate(startOfDay(parseISO(bookingForm.startTime)));
+    setAllocatedTimeKey("");
     setShowBookingModal(false);
   };
 
@@ -1305,6 +1364,7 @@ export default function StationsPage() {
     setAllocationResult(null);
     setSelectedCandidate(null);
     setExpandedCandidates(new Set());
+    setAllocatedTimeKey("");
   };
 
   return (
@@ -1774,6 +1834,18 @@ export default function StationsPage() {
             </button>
           ) : (
             <div className="space-y-3">
+              {timeChangedAfterAllocation && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-900/20 border border-amber-700/40 text-amber-300 text-xs">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>时间已修改，当前推荐结果可能不再适用，请重新分配</span>
+                  <button
+                    className="ml-auto text-amber-200 underline hover:no-underline"
+                    onClick={handleReallocate}
+                  >
+                    重新分配
+                  </button>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-sm text-ink-300">
                   <Sparkles className="w-4 h-4 text-darkroom-400" />
@@ -1864,11 +1936,14 @@ export default function StationsPage() {
         </div>
       </Modal>
 
-      {detailBooking && (
+      {liveDetailBooking && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
             className="absolute inset-0 bg-ink-950/80 backdrop-blur-sm"
-            onClick={() => setDetailBooking(null)}
+            onClick={() => {
+              setDetailBooking(null);
+              setShowCompletionForm(false);
+            }}
           />
           <div className="relative dark-card w-full max-w-2xl mx-4 max-h-[85vh] overflow-hidden shadow-2xl flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-ink-800 flex-shrink-0">
@@ -1878,16 +1953,19 @@ export default function StationsPage() {
                 </div>
                 <div>
                   <h3 className="text-lg font-serif text-ink-50">
-                    {detailBooking.photographer}
+                    {liveDetailBooking.photographer}
                   </h3>
                   <p className="text-xs text-ink-400 font-mono">
-                    {detailBooking.filmType} × {detailBooking.filmCount}卷
+                    {liveDetailBooking.filmType} × {liveDetailBooking.filmCount}卷
                   </p>
                 </div>
               </div>
               <button
                 className="ghost-btn !p-1.5"
-                onClick={() => setDetailBooking(null)}
+                onClick={() => {
+                  setDetailBooking(null);
+                  setShowCompletionForm(false);
+                }}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1896,23 +1974,23 @@ export default function StationsPage() {
             <div className="p-5 overflow-y-auto flex-1 space-y-5">
               <div className="grid grid-cols-2 gap-4">
                 <div className="dark-card p-3">
-                  <div className="text-xs text-ink-400 mb-1">状态</div>
-                  <span className={getStatusBadgeClass(detailBooking.status)}>
+                  <div className="text-xs text-ink-400 mb-2">当前状态</div>
+                  <span className={getStatusBadgeClass(liveDetailBooking.status)}>
                     <span
                       className={clsx(
                         "status-dot",
-                        getStatusColorClass(detailBooking.status),
+                        getStatusColorClass(liveDetailBooking.status),
                       )}
                     />
                     {(BOOKING_STATUS_LABELS as Record<Booking["status"], string>)[
-                      detailBooking.status
+                      liveDetailBooking.status
                     ]}
                   </span>
                 </div>
                 <div className="dark-card p-3">
                   <div className="text-xs text-ink-400 mb-1">使用工位</div>
                   <div className="text-sm text-ink-100">
-                    {stations.find((s) => s.id === detailBooking.stationId)?.name ||
+                    {stations.find((s) => s.id === liveDetailBooking.stationId)?.name ||
                       "-"}
                   </div>
                 </div>
@@ -1924,42 +2002,282 @@ export default function StationsPage() {
                   <span className="text-sm font-medium text-ink-200">预约时间</span>
                 </div>
                 <div className="text-lg font-mono text-ink-100">
-                  {formatDateTime(detailBooking.startTime)}
+                  {formatDateTime(liveDetailBooking.startTime)}
                   <span className="mx-2 text-ink-500">→</span>
-                  {formatTime(detailBooking.endTime)}
+                  {formatTime(liveDetailBooking.endTime)}
                 </div>
                 <div className="text-xs text-ink-500 mt-1">
                   时长{" "}
                   {differenceInMinutes(
-                    parseISO(detailBooking.endTime),
-                    parseISO(detailBooking.startTime),
+                    parseISO(liveDetailBooking.endTime),
+                    parseISO(liveDetailBooking.startTime),
                   )}{" "}
                   分钟
                 </div>
               </div>
 
-              {detailBooking.notes && (
+              {liveDetailBooking.notes && (
                 <div className="dark-card p-4">
                   <div className="flex items-center gap-2 mb-2">
                     <FileText className="w-4 h-4 text-darkroom-400" />
                     <span className="text-sm font-medium text-ink-200">备注</span>
                   </div>
-                  <p className="text-sm text-ink-300">{detailBooking.notes}</p>
+                  <p className="text-sm text-ink-300">{liveDetailBooking.notes}</p>
                 </div>
               )}
 
               <BookingChemicalFlow
-                booking={detailBooking}
+                booking={liveDetailBooking}
                 dispatches={dispatchRecords}
                 wastes={wasteRecords}
                 batches={chemicalBatches}
               />
+
+              {showCompletionForm && (
+                <div className="dark-card p-4 border border-darkroom-500/40">
+                  <div className="flex items-center gap-2 mb-4">
+                    <StopCircle className="w-4 h-4 text-darkroom-400" />
+                    <span className="text-sm font-medium text-ink-200">
+                      完成登记 — 记录实际冲洗用量和废液回收
+                    </span>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="p-3 rounded-md bg-ink-950/50 border border-ink-800">
+                      <div className="text-xs text-ink-400 mb-2">冲洗药水用量</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                            选择批次
+                          </label>
+                          <select
+                            className="input-field mt-1"
+                            value={completionData.batchId}
+                            onChange={(e) =>
+                              setCompletionData({
+                                ...completionData,
+                                batchId: e.target.value,
+                              })
+                            }
+                          >
+                            <option value="">-- 选择批次 --</option>
+                            {chemicalBatches
+                              .filter(
+                                (b) =>
+                                  b.remainingVolume > 0 && b.status !== "expired",
+                              )
+                              .map((batch) => (
+                                <option key={batch.id} value={batch.id}>
+                                  {batch.name} ({CHEMICAL_TYPE_LABELS[batch.type]})
+                                  - 剩余{batch.remainingVolume.toLocaleString()}ml
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                            使用量 (ml)
+                          </label>
+                          <input
+                            type="number"
+                            className="input-field mt-1"
+                            placeholder="出库量"
+                            min={1}
+                            value={completionData.volume}
+                            onChange={(e) =>
+                              setCompletionData({
+                                ...completionData,
+                                volume: e.target.value,
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                            操作人
+                          </label>
+                          <input
+                            type="text"
+                            className="input-field mt-1"
+                            placeholder="登记操作人"
+                            value={completionData.operator}
+                            onChange={(e) =>
+                              setCompletionData({
+                                ...completionData,
+                                operator: e.target.value,
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-md bg-ink-950/50 border border-ink-800">
+                      <div className="text-xs text-ink-400 mb-2">废液回收</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                            回收量 (ml)
+                          </label>
+                          <input
+                            type="number"
+                            className="input-field mt-1"
+                            placeholder="0 = 暂不回收"
+                            min={0}
+                            value={completionData.wasteVolume}
+                            onChange={(e) =>
+                              setCompletionData({
+                                ...completionData,
+                                wasteVolume: e.target.value,
+                              })
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                            废液类型
+                          </label>
+                          <select
+                            className="input-field mt-1"
+                            value={completionData.wasteType}
+                            onChange={(e) =>
+                              setCompletionData({
+                                ...completionData,
+                                wasteType: e.target.value as WasteType,
+                              })
+                            }
+                          >
+                            {Object.entries(WASTE_TYPE_LABELS).map(([k, v]) => (
+                              <option key={k} value={k}>
+                                {v}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] text-ink-500 uppercase tracking-wider">
+                            回收方式
+                          </label>
+                          <select
+                            className="input-field mt-1"
+                            value={completionData.recoveryMethod}
+                            onChange={(e) =>
+                              setCompletionData({
+                                ...completionData,
+                                recoveryMethod: e.target.value as RecoveryMethod,
+                              })
+                            }
+                          >
+                            {Object.entries(RECOVERY_METHOD_LABELS).map(([k, v]) => (
+                              <option key={k} value={k}>
+                                {v}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button
+                        className="amber-btn flex items-center gap-1.5"
+                        onClick={() => {
+                          const batch = completionData.batchId;
+                          const vol = Number(completionData.volume);
+
+                          if (batch && vol > 0) {
+                            const selectedBatch = chemicalBatches.find(
+                              (b) => b.id === batch,
+                            );
+                            if (selectedBatch && vol > selectedBatch.remainingVolume) {
+                              alert("出库量超过批次剩余量");
+                              return;
+                            }
+                            addDispatchRecord({
+                              batchId: batch,
+                              volume: vol,
+                              stationId: liveDetailBooking.stationId,
+                              bookingId: liveDetailBooking.id,
+                              operator: completionData.operator || "系统",
+                              dispatchTime: new Date().toISOString(),
+                              purpose: `${liveDetailBooking.photographer} - ${liveDetailBooking.filmType}冲洗`,
+                            });
+                          }
+
+                          const wasteVol = Number(completionData.wasteVolume);
+                          if (wasteVol > 0 && batch) {
+                            addWasteRecord({
+                              batchId: batch,
+                              stationId: liveDetailBooking.stationId,
+                              volume: wasteVol,
+                              type: completionData.wasteType,
+                              recoveryMethod: completionData.recoveryMethod,
+                              operator: completionData.operator || "系统",
+                              recoveryTime: new Date().toISOString(),
+                            });
+                          }
+
+                          updateBooking(liveDetailBooking.id, {
+                            status: "completed",
+                          });
+                          setShowCompletionForm(false);
+                          setDetailBooking(null);
+                        }}
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        确认完成
+                      </button>
+                      <button
+                        className="ghost-btn"
+                        onClick={() => setShowCompletionForm(false)}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-end gap-3 px-5 py-4 border-t border-ink-800 flex-shrink-0">
+            <div className="flex justify-between items-center px-5 py-4 border-t border-ink-800 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                {liveDetailBooking.status === "confirmed" && (
+                  <button
+                    className="amber-btn flex items-center gap-1.5"
+                    onClick={() =>
+                      updateBooking(liveDetailBooking.id, { status: "in_progress" })
+                    }
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    开始冲洗
+                  </button>
+                )}
+                {liveDetailBooking.status === "in_progress" && (
+                  <button
+                    className="amber-btn flex items-center gap-1.5"
+                    onClick={() => setShowCompletionForm(true)}
+                  >
+                    <StopCircle className="w-4 h-4" />
+                    完成登记
+                  </button>
+                )}
+                {liveDetailBooking.status === "pending" && (
+                  <button
+                    className="amber-btn flex items-center gap-1.5"
+                    onClick={() =>
+                      updateBooking(liveDetailBooking.id, { status: "confirmed" })
+                    }
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    确认预约
+                  </button>
+                )}
+              </div>
               <button
                 className="ghost-btn"
-                onClick={() => setDetailBooking(null)}
+                onClick={() => {
+                  setDetailBooking(null);
+                  setShowCompletionForm(false);
+                }}
               >
                 关闭
               </button>
